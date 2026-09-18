@@ -21,7 +21,6 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-src = ["src"]
 
-[tool.ruff.lint.isort]
-known-first-party = ["market_ai"]
+[tool.ruff.lint]
+ignore = ["I001"]
