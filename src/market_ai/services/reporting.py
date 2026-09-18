@@ -1,5 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
 from market_ai.models import Candidate
 
 DISCLAIMER = "Research only. Not investment advice. Market investments involve risk and possible capital loss."

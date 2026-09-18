@@ -1,7 +1,8 @@
 import pytest
-from market_ai.providers.mock import MockBrokerProvider
+
 from market_ai.providers.base import DisabledTradingError
-from market_ai.services.scoring import swing_candidate, compounder_candidate
+from market_ai.providers.mock import MockBrokerProvider
+from market_ai.services.scoring import compounder_candidate, swing_candidate
 
 def test_swing_score_range():
     bars = MockBrokerProvider().daily_bars()["DEMOALPHA"]

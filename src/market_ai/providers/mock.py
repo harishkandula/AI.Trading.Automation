@@ -1,4 +1,6 @@
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from market_ai.models import Bar
 from market_ai.providers.base import BrokerProvider
 
@@ -10,7 +12,7 @@ class MockBrokerProvider(BrokerProvider):
         ]
 
     def daily_bars(self) -> dict[str, list[Bar]]:
-        today = date.today()
+        today = datetime.now(tz=ZoneInfo("Asia/Kolkata")).date()
         output: dict[str, list[Bar]] = {}
         for symbol, base, drift in [("DEMOALPHA", 100.0, 0.7), ("DEMOBETA", 180.0, -0.1), ("DEMOGAMMA", 75.0, 0.35)]:
             bars = []

@@ -6,6 +6,7 @@ Wire documented SDK methods only after reviewing the account's current API docum
 """
 from market_ai.providers.base import BrokerProvider, DisabledTradingError
 
+
 class GrowwBrokerProvider(BrokerProvider):
     def __init__(self, token: str | None = None) -> None:
         self._token = token

@@ -1,6 +1,8 @@
-from datetime import date
-from market_ai.services.scoring import compounder_candidate
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from market_ai.services.reporting import render_report
+from market_ai.services.scoring import compounder_candidate
 
 SYNTHETIC = {
  "DEMOALPHA": {"revenue_cagr": .22, "profit_cagr": .27, "roce": .21, "debt_equity": .25, "cash_conversion": .90},
@@ -9,5 +11,5 @@ SYNTHETIC = {
 }
 
 def handler(event, context):
-    items = [compounder_candidate(s, f, date.today().isoformat()) for s, f in SYNTHETIC.items()]
+    items = [compounder_candidate(s, f, datetime.now(tz=ZoneInfo("Asia/Kolkata")).date().isoformat()) for s, f in SYNTHETIC.items()]
     return render_report("Weekly compounder research", items)

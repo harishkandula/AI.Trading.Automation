@@ -1,6 +1,6 @@
 from market_ai.handlers.common import provider
-from market_ai.services.scoring import swing_candidate
 from market_ai.services.reporting import render_report
+from market_ai.services.scoring import swing_candidate
 
 def handler(event, context):
     p = provider()
