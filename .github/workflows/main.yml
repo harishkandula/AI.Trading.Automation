@@ -50,7 +50,12 @@ jobs:
 
       - name: Terraform Init
         run: |
-          terraform -chdir=infrastructure init -backend=false
+          terraform -chdir=infrastructure init -backend=false 2>&1 | tee /tmp/tf_init.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Show Terraform Init Output
+        if: failure()
+        run: cat /tmp/tf_init.txt
 
       - name: Terraform Validate
         run: |
