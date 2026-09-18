@@ -1,0 +1,100 @@
+name: Deploy Market AI
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+
+jobs:
+
+  validate:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run Tests
+        run: |
+          pytest -q
+
+      - name: Lint
+        run: |
+          ruff check .
+
+      - name: Terraform Install
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Format Check
+        run: |
+          terraform -chdir=infrastructure fmt -check
+
+      - name: Terraform Init
+        run: |
+          terraform -chdir=infrastructure init -backend=false
+
+      - name: Terraform Validate
+        run: |
+          terraform -chdir=infrastructure validate
+
+  deploy:
+
+    needs: validate
+
+    runs-on: ubuntu-latest
+
+    environment: prod
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build Lambda Package
+        run: |
+          chmod +x scripts/build_lambda.sh
+          ./scripts/build_lambda.sh
+
+      - name: Terraform Init
+        run: |
+          terraform -chdir=infrastructure init
+
+      - name: Terraform Plan
+        run: |
+          terraform -chdir=infrastructure plan \
+            -out=tfplan
+
+      - name: Terraform Apply
+        run: |
+          terraform -chdir=infrastructure apply \
+            -auto-approve tfplan
