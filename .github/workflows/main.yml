@@ -39,7 +39,11 @@ jobs:
 
       - name: Lint
         run: |
-          ruff check src/ tests/ --select I,DTZ
+          ruff check src/ tests/ --select I,DTZ 2>&1 | tee /tmp/ruff.txt; exit ${PIPESTATUS[0]}
+
+      - name: Show Ruff Output
+        if: failure()
+        run: cat /tmp/ruff.txt
 
       - name: Terraform Install
         uses: hashicorp/setup-terraform@v3
