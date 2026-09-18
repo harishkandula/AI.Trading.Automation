@@ -1,0 +1,3 @@
+project = "market-ai"
+environment = "dev"
+aws_region = "ap-south-1"
