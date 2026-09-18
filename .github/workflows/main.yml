@@ -39,7 +39,7 @@ jobs:
 
       - name: Lint
         run: |
-          ruff check src/ tests/
+          ruff check src/ tests/ --output-format=text 2>&1 || (echo "=== RUFF EXIT CODE $? ==="; exit 1)
 
       - name: Terraform Install
         uses: hashicorp/setup-terraform@v3
