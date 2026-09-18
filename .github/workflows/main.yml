@@ -39,7 +39,7 @@ jobs:
 
       - name: Lint
         run: |
-          ruff check src/ tests/
+          ruff check src/ tests/ --output-format=github
 
       - name: Terraform Install
         uses: hashicorp/setup-terraform@v3
