@@ -1,4 +1,5 @@
 import json
+
 import boto3
 
 class S3Store:

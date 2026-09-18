@@ -1,5 +1,5 @@
 from market_ai.models import Bar, Candidate
-from market_ai.services.indicators import sma, pct_change, normalize
+from market_ai.services.indicators import normalize, pct_change, sma
 
 def swing_candidate(symbol: str, bars: list[Bar]) -> Candidate:
     if len(bars) < 60:

@@ -21,3 +21,4 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+exclude = ["build", "market-ai"]
