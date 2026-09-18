@@ -21,4 +21,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-exclude = ["build", "market-ai"]
+extend-exclude = ["build/*", "market-ai/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
