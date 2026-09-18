@@ -43,7 +43,7 @@ terraform plan
 terraform apply
 ```
 
-Review the plan before apply. The delivered GitHub deployment workflow expects an OIDC role ARN stored as `AWS_DEPLOY_ROLE_ARN`.
+Review the plan before apply. The delivered GitHub deployment workflow expects an OIDC role ARN stored as `AWS_DEPLOY_ROLE_ARN` in the `prod` environment variables.
 
 ## Groww
 
