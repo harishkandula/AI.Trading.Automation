@@ -31,7 +31,7 @@ class Candle(BaseModel):
     ingested_at: datetime | None = None
 
     @model_validator(mode="after")
-    def _validate_ohlcv(self) -> "Candle":
+    def _validate_ohlcv(self) -> Candle:
         if self.open <= 0:
             raise ValueError(f"open must be > 0, got {self.open}")
         if self.high <= 0:

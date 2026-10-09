@@ -21,6 +21,8 @@ class MarketDataProvider(ABC):
         end: date,
     ) -> list[Candle]: ...
 
-    def get_live_quote(self, symbol: str) -> dict: ...
+    def get_live_quote(self, symbol: str) -> dict:
+        return {}
 
-    def get_market_status(self) -> dict: ...
+    def get_market_status(self) -> dict:
+        return {}

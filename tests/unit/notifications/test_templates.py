@@ -1,9 +1,9 @@
 """Notification template tests."""
 import sys
-from datetime import date, datetime, timezone
+from datetime import date
 sys.path.insert(0, "src")
 
-from app.notifications.templates import format_daily_report, format_signal, DISCLAIMER
+from app.notifications.templates import format_daily_report, format_signal
 
 
 def _sig():

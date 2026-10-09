@@ -21,8 +21,16 @@ def compounder_candidate(symbol: str, fundamentals: dict, as_of: str) -> Candida
     missing = [k for k in required if k not in fundamentals]
     if missing:
         raise ValueError(f"Missing fundamentals: {missing}")
-    growth = (normalize(fundamentals["revenue_cagr"], 0, .30) + normalize(fundamentals["profit_cagr"], 0, .35))/2
-    quality = (normalize(fundamentals["roce"], .08, .30) + normalize(fundamentals["cash_conversion"], .4, 1.2))/2
-    balance = 100-normalize(fundamentals["debt_equity"], 0, 1.5)
+    growth = (
+        normalize(fundamentals["revenue_cagr"], 0, .30)
+        + normalize(fundamentals["profit_cagr"], 0, .35)
+    ) / 2
+    quality = (
+        normalize(fundamentals["roce"], .08, .30)
+        + normalize(fundamentals["cash_conversion"], .4, 1.2)
+    ) / 2
+    balance = 100 - normalize(fundamentals["debt_equity"], 0, 1.5)
     score = round(.40*growth + .40*quality + .20*balance, 2)
-    return Candidate(symbol, score, "COMPOUNDER_RESEARCH", ["Growth, quality and leverage screen"], [], as_of)
+    return Candidate(
+        symbol, score, "COMPOUNDER_RESEARCH", ["Growth, quality and leverage screen"], [], as_of
+    )

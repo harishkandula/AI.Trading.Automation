@@ -19,9 +19,9 @@ def test_true_range_gap_up():
 
 def test_atr_warm_up_nones():
     h = [101.0] * 20
-    l = [99.0] * 20
+    lo = [99.0] * 20
     c = [100.0] * 20
-    result = wilder_atr(h, l, c, period=14)
+    result = wilder_atr(h, lo, c, period=14)
     assert all(v is None for v in result[:14])
     assert result[14] is not None
 
@@ -33,9 +33,9 @@ def test_atr_insufficient_data():
 
 def test_atr_constant_series():
     h = [101.0] * 20
-    l = [99.0] * 20
+    lo = [99.0] * 20
     c = [100.0] * 20
-    result = wilder_atr(h, l, c, period=14)
+    result = wilder_atr(h, lo, c, period=14)
     # True range is always 2.0 for constant series
     for v in result[14:]:
         assert v == pytest.approx(2.0)

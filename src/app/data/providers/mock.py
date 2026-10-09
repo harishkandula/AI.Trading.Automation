@@ -1,8 +1,7 @@
 """Synthetic data provider for testing and local development."""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
 from app.core.time_utils import IST, trading_days_between
 from app.data.providers.base import MarketDataProvider

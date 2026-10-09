@@ -15,12 +15,12 @@ from app.strategies.morning_star import MorningStar
 IST = ZoneInfo("Asia/Kolkata")
 
 
-def _daily(sym, d, o=100.0, h=101.0, l=99.0, c=100.0, vol=500_000):
+def _daily(sym, d, o=100.0, h=101.0, lo=99.0, c=100.0, vol=500_000):
     return Candle(
         instrument_id=sym, exchange="NSE", trading_symbol=sym,
         timeframe=Timeframe.D1,
         timestamp=datetime(d.year, d.month, d.day, 15, 30, tzinfo=IST),
-        open=o, high=h, low=l, close=c, volume=float(vol),
+        open=o, high=h, low=lo, close=c, volume=float(vol),
         source="test",
     )
 
@@ -48,7 +48,8 @@ def test_gap_up_signal_when_conditions_met():
     candles = _base_candles(20)
     prev = candles[-1]
     p = prev.close
-    gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.06, p*1.04, p*1.055, int(prev.volume*5))
+    vol5 = int(prev.volume * 5)
+    gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.06, p*1.04, p*1.055, vol5)
     candles.append(gap_candle)
     strat = GapUpVolume()
     signals = strat.generate_signals("TEST", candles, as_of_index=len(candles)-1)
@@ -61,7 +62,8 @@ def test_gap_up_no_signal_when_close_below_open():
     prev = candles[-1]
     p = prev.close
     # open 1.05x, close 1.04x → close < open → fails require_close_above_open
-    gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.06, p*1.02, p*1.04, int(prev.volume*5))
+    vol5 = int(prev.volume * 5)
+    gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.06, p*1.02, p*1.04, vol5)
     candles.append(gap_candle)
     strat = GapUpVolume()
     last_signals = [s for s in strat.generate_signals("TEST", candles, as_of_index=len(candles)-1)
@@ -73,7 +75,8 @@ def test_gap_up_stop_is_3pct_below_entry():
     candles = _base_candles(20)
     prev = candles[-1]
     p = prev.close
-    gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.07, p*1.04, p*1.055, int(prev.volume*5))
+    vol5 = int(prev.volume * 5)
+    gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.07, p*1.04, p*1.055, vol5)
     candles.append(gap_candle)
     strat = GapUpVolume()
     signals = strat.generate_signals("TEST", candles, as_of_index=len(candles)-1)

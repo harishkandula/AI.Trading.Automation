@@ -15,7 +15,9 @@ _FAILED_NOTIFICATIONS: list[dict[str, Any]] = []
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 def _post(bot_token: str, chat_id: str, text: str) -> None:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    resp = httpx.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+    resp = httpx.post(
+        url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10
+    )
     resp.raise_for_status()
 
 
@@ -26,7 +28,9 @@ def send(bot_token: str, chat_id: str, message: str) -> bool:
         return True
     except Exception as exc:
         logger.warning(f"Telegram send failed: {type(exc).__name__}: {exc}")
-        _FAILED_NOTIFICATIONS.append({"bot_token": "[REDACTED]", "chat_id": chat_id, "message": message})
+        _FAILED_NOTIFICATIONS.append(
+            {"bot_token": "[REDACTED]", "chat_id": chat_id, "message": message}
+        )
         return False
 
 

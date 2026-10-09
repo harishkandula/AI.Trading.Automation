@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.core.time_utils import IST, NSE_OPEN
+from app.core.time_utils import IST
 
 
 def session_vwap(

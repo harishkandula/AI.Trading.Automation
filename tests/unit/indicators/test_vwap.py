@@ -24,10 +24,10 @@ def test_single_bar_vwap_equals_typical_price():
 def test_vwap_resets_on_new_day():
     ts = [_ts("2024-01-02", 9, 15), _ts("2024-01-02", 9, 20), _ts("2024-01-03", 9, 15)]
     h = [110.0, 112.0, 120.0]
-    l = [90.0, 92.0, 100.0]
+    lo = [90.0, 92.0, 100.0]
     c = [100.0, 102.0, 110.0]
     v = [1000.0, 2000.0, 500.0]
-    result = session_vwap(ts, h, l, c, v)
+    result = session_vwap(ts, h, lo, c, v)
     # Day 2 bar 1 VWAP should equal typical price of that bar alone
     expected_day2_bar1 = (120 + 100 + 110) / 3
     assert result[2] == pytest.approx(expected_day2_bar1)

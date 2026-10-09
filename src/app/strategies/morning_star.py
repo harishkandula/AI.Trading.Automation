@@ -56,8 +56,12 @@ class MorningStar(StrategyBase):
         vol_avg = volume_sma(volumes, p["volume_period"])
 
         for i in range(max(self.warmup_bars, 2), as_of_index + 1):
-            c1 = CandleAttrs(candles[i-2].open, candles[i-2].high, candles[i-2].low, candles[i-2].close)
-            c2 = CandleAttrs(candles[i-1].open, candles[i-1].high, candles[i-1].low, candles[i-1].close)
+            c1 = CandleAttrs(
+                candles[i-2].open, candles[i-2].high, candles[i-2].low, candles[i-2].close
+            )
+            c2 = CandleAttrs(
+                candles[i-1].open, candles[i-1].high, candles[i-1].low, candles[i-1].close
+            )
             c3 = CandleAttrs(candles[i].open, candles[i].high, candles[i].low, candles[i].close)
 
             qualifies, pattern_reasons = is_morning_star(
@@ -104,7 +108,9 @@ class MorningStar(StrategyBase):
                 signal_timestamp=ts,
                 decision_timestamp=ts,
                 planned_entry_type="NEXT_SESSION_OPEN",
-                planned_entry_timestamp=datetime(entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc),
+                planned_entry_timestamp=datetime(
+                    entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc
+                ),
                 entry_reference_price=entry_ref,
                 stop_price=stop,
                 holding_period_sessions=p["holding_sessions"],

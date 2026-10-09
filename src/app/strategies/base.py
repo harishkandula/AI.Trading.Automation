@@ -25,8 +25,8 @@ class StrategyBase(ABC):
     def default_params(cls) -> dict[str, Any]:
         """Return the canonical default parameters."""
 
-    def _validate_params(self, params: dict[str, Any]) -> None:
-        """Override to add parameter validation."""
+    def _validate_params(self, params: dict[str, Any]) -> None:  # noqa: B027
+        pass
 
     @abstractmethod
     def generate_signals(
@@ -42,8 +42,12 @@ class StrategyBase(ABC):
         """
 
     def params_hash(self) -> str:
-        import hashlib, json
+        import hashlib
+        import json
         return hashlib.sha256(json.dumps(self.params, sort_keys=True).encode()).hexdigest()[:16]
 
     def describe(self) -> str:
-        return f"{self.strategy_id} v{self.strategy_version} | {self.timeframe.value} | params={self.params}"
+        return (
+            f"{self.strategy_id} v{self.strategy_version}"
+            f" | {self.timeframe.value} | params={self.params}"
+        )

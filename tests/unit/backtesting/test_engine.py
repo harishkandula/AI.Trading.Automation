@@ -6,10 +6,8 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 sys.path.insert(0, "src")
 
-import pytest
 from app.backtesting.engine import run_backtest
 from app.backtesting.positions import risk_based_quantity
-from app.backtesting.costs import DELIVERY_PROFILE
 from app.models.signal import Signal, SignalStatus
 from app.models.candle import Candle, Timeframe
 from app.models.trade import TradeStatus
@@ -17,17 +15,21 @@ from app.models.trade import TradeStatus
 IST = ZoneInfo("Asia/Kolkata")
 
 
-def _candle(sym: str, d: date, o: float, h: float, l: float, c: float, vol: float = 100000) -> Candle:
+def _candle(
+    sym: str, d: date, o: float, h: float, lo: float, c: float, vol: float = 100000
+) -> Candle:
     return Candle(
         instrument_id=sym, exchange="NSE", trading_symbol=sym,
         timeframe=Timeframe.D1,
         timestamp=datetime(d.year, d.month, d.day, 9, 15, tzinfo=IST),
-        open=o, high=h, low=l, close=c, volume=vol, source="test",
+        open=o, high=h, low=lo, close=c, volume=vol, source="test",
     )
 
 
-def _signal(sym: str, entry_date: date, entry_ref: float, stop: float, targets=None, hold=5) -> Signal:
-    from app.models.signal import Signal, SignalStatus
+def _signal(
+    sym: str, entry_date: date, entry_ref: float, stop: float, targets=None, hold=5
+) -> Signal:
+    from app.models.signal import Signal
     from datetime import datetime, timezone
     return Signal(
         signal_id=f"test_{sym}_{entry_date}",
@@ -36,9 +38,15 @@ def _signal(sym: str, entry_date: date, entry_ref: float, stop: float, targets=N
         symbol=sym,
         exchange="NSE",
         timeframe="1d",
-        signal_timestamp=datetime(entry_date.year, entry_date.month, entry_date.day, 15, 30, tzinfo=timezone.utc),
-        decision_timestamp=datetime(entry_date.year, entry_date.month, entry_date.day, 15, 30, tzinfo=timezone.utc),
-        planned_entry_timestamp=datetime(entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc),
+        signal_timestamp=datetime(
+            entry_date.year, entry_date.month, entry_date.day, 15, 30, tzinfo=timezone.utc
+        ),
+        decision_timestamp=datetime(
+            entry_date.year, entry_date.month, entry_date.day, 15, 30, tzinfo=timezone.utc
+        ),
+        planned_entry_timestamp=datetime(
+            entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc
+        ),
         entry_reference_price=entry_ref,
         stop_price=stop,
         target_prices=targets or [],
@@ -48,7 +56,7 @@ def _signal(sym: str, entry_date: date, entry_ref: float, stop: float, targets=N
 
 
 def test_target_hit_closes_trade():
-    entry_date = date(2024, 1, 2)
+    date(2024, 1, 2)
     # Candle where target is hit
     candles = [
         _candle("SYM", date(2024, 1, 2), 100, 110, 98, 105),  # entry bar
@@ -105,7 +113,7 @@ def test_time_exit():
 def test_insufficient_cash_rejected():
     candles = [_candle("SYM", date(2024, 1, 2), 100, 102, 98, 101)]
     sig = _signal("SYM", date(2024, 1, 2), 100, 97, hold=5)
-    state = run_backtest([sig], {"SYM": candles}, initial_capital=50, cost_profile="zero_cost")  # tiny capital
+    state = run_backtest([sig], {"SYM": candles}, initial_capital=50, cost_profile="zero_cost")
     assert len(state.rejected_trades) == 1
 
 
@@ -116,7 +124,10 @@ def test_max_positions_respected():
         sym = f"SYM{i}"
         candles_by_sym[sym] = [_candle(sym, date(2024, 1, 2), 100, 102, 98, 101)]
         sigs.append(_signal(sym, date(2024, 1, 2), 100, 97, hold=5))
-    state = run_backtest(sigs, candles_by_sym, initial_capital=10_000_000, max_open_positions=5, cost_profile="zero_cost")
+    state = run_backtest(
+        sigs, candles_by_sym, initial_capital=10_000_000,
+        max_open_positions=5, cost_profile="zero_cost",
+    )
     assert len(state.open_trades) <= 5
 
 
@@ -125,8 +136,11 @@ def test_duplicate_prevention():
     sig1 = _signal("SYM", date(2024, 1, 2), 100, 97, hold=5)
     sig2 = _signal("SYM", date(2024, 1, 2), 100, 97, hold=5)
     sig2 = sig2.model_copy(update={"signal_id": sig1.signal_id})  # same id
-    # Both signals point to same entry date; engine should enter at most 1 (max_new_per_session=1 here)
-    state = run_backtest([sig1, sig2], {"SYM": candles}, initial_capital=10_000_000, max_new_positions_per_session=1, cost_profile="zero_cost")
+    # Both signals point to same entry date; at most 1 entered (max_new_per_session=1)
+    state = run_backtest(
+        [sig1, sig2], {"SYM": candles}, initial_capital=10_000_000,
+        max_new_positions_per_session=1, cost_profile="zero_cost",
+    )
     assert len(state.open_trades) + len(state.closed_trades) <= 1
 
 

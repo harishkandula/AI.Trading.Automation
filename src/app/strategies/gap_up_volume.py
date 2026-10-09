@@ -67,9 +67,14 @@ class GapUpVolume(StrategyBase):
             if avg is not None:
                 threshold = p["volume_multiplier"] * avg
                 if cur_vol >= threshold:
-                    reasons.append(f"Volume {cur_vol:.0f} >= {p['volume_multiplier']}x {p['volume_lookback']}d avg {threshold:.0f}")
+                    reasons.append(
+                        f"Volume {cur_vol:.0f} >= {p['volume_multiplier']}x"
+                        f" {p['volume_lookback']}d avg {threshold:.0f}"
+                    )
                 else:
-                    fails.append(f"Volume {cur_vol:.0f} < {p['volume_multiplier']}x avg {threshold:.0f}")
+                    fails.append(
+                        f"Volume {cur_vol:.0f} < {p['volume_multiplier']}x avg {threshold:.0f}"
+                    )
             else:
                 fails.append("Insufficient volume history")
 
@@ -97,11 +102,17 @@ class GapUpVolume(StrategyBase):
                 signal_timestamp=ts,
                 decision_timestamp=ts,
                 planned_entry_type="NEXT_SESSION_OPEN",
-                planned_entry_timestamp=datetime(entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc),
+                planned_entry_timestamp=datetime(
+                    entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc
+                ),
                 entry_reference_price=entry_ref,
                 stop_price=stop,
                 holding_period_sessions=p["holding_sessions"],
-                indicators={"gap_pct": round(gap_pct, 2), "volume": cur_vol, "volume_avg": round(avg or 0, 0)},
+                indicators={
+                    "gap_pct": round(gap_pct, 2),
+                    "volume": cur_vol,
+                    "volume_avg": round(avg or 0, 0),
+                },
                 qualification_reasons=reasons,
                 risk_warnings=[
                     "Historical strategy evidence required before acting",

@@ -38,7 +38,11 @@ def risk_based_quantity(
 
     qty = min(qty_by_risk, qty_by_cap, qty_by_cash)
     if qty <= 0:
-        return SizingResult(0, f"Zero quantity: risk_qty={qty_by_risk} cap_qty={qty_by_cap} cash_qty={qty_by_cash}", rejected=True)
+        return SizingResult(
+            0,
+            f"Zero quantity: risk_qty={qty_by_risk} cap_qty={qty_by_cap} cash_qty={qty_by_cash}",
+            rejected=True,
+        )
 
     return SizingResult(
         quantity=qty,

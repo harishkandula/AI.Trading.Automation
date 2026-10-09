@@ -14,10 +14,14 @@ class MockBrokerProvider(BrokerProvider):
     def daily_bars(self) -> dict[str, list[Bar]]:
         today = datetime.now(tz=ZoneInfo("Asia/Kolkata")).date()
         output: dict[str, list[Bar]] = {}
-        for symbol, base, drift in [("DEMOALPHA", 100.0, 0.7), ("DEMOBETA", 180.0, -0.1), ("DEMOGAMMA", 75.0, 0.35)]:
+        series = [("DEMOALPHA", 100.0, 0.7), ("DEMOBETA", 180.0, -0.1), ("DEMOGAMMA", 75.0, 0.35)]
+        for symbol, base, drift in series:
             bars = []
             for i in range(90):
                 close = base + i * drift + ((i % 7) - 3) * 0.25
-                bars.append(Bar(symbol, today - timedelta(days=89-i), close-0.5, close+1, close-1, close, 100000+i*2500))
+                bars.append(Bar(
+                    symbol, today - timedelta(days=89 - i),
+                    close - 0.5, close + 1, close - 1, close, 100000 + i * 2500,
+                ))
             output[symbol] = bars
         return output

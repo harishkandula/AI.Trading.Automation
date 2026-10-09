@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from app.backtesting.costs import CostProfile, DELIVERY_PROFILE, get_profile
+from app.backtesting.costs import CostProfile, get_profile
 from app.backtesting.positions import risk_based_quantity
 from app.core.identifiers import new_uuid
 from app.core.time_utils import nth_trading_day_after
@@ -36,6 +36,19 @@ class PortfolioState:
 def _execution_price(ref_price: float, slippage_pct: float, direction: int = 1) -> float:
     """direction=1 buy (adverse = higher), direction=-1 sell (adverse = lower)."""
     return ref_price * (1 + direction * slippage_pct)
+
+
+def _open_value(
+    open_trades: list[Trade],
+    candle_map: dict[str, dict[date, Candle]],
+    today: date,
+) -> float:
+    total = 0.0
+    for t in open_trades:
+        c = candle_map.get(t.symbol, {}).get(today)
+        price = c.close if c else (t.entry_price or 0.0)
+        total += price * t.remaining_quantity
+    return total
 
 
 def run_backtest(
@@ -71,7 +84,9 @@ def run_backtest(
         pending.setdefault(entry_date, []).append(sig)
 
     # Collect all trading dates across all symbols
-    all_dates: list[date] = sorted({c.timestamp.date() for bars in candles_by_symbol.values() for c in bars})
+    all_dates: list[date] = sorted(
+        {c.timestamp.date() for bars in candles_by_symbol.values() for c in bars}
+    )
 
     # Quick lookup: symbol -> date -> candle
     candle_map: dict[str, dict[date, Candle]] = {}
@@ -102,7 +117,10 @@ def run_backtest(
             # Gap-through stop check
             if open_price <= stop:
                 exec_price = _execution_price(open_price, profile.slippage_pct, direction=-1)
-                _close_trade(trade, today, exec_price, candle, TradeStatus.CLOSED_STOP, state, profile, "Gap through stop")
+                _close_trade(
+                    trade, today, exec_price, candle, TradeStatus.CLOSED_STOP, state, profile,
+                    "Gap through stop",
+                )
                 continue
 
             hit_target = targets and close_price >= targets[0]
@@ -119,7 +137,9 @@ def run_backtest(
                 partial_qty = int(trade.remaining_quantity * 0.5)
                 if partial_qty > 0:
                     pnl = (t1_price - trade.entry_price) * partial_qty
-                    cost_dict = profile.compute(trade.entry_price * partial_qty, t1_price * partial_qty)
+                    cost_dict = profile.compute(
+                        trade.entry_price * partial_qty, t1_price * partial_qty
+                    )
                     pnl -= cost_dict["total"]
                     trade.remaining_quantity -= partial_qty
                     trade.realized_pnl += pnl
@@ -133,7 +153,9 @@ def run_backtest(
                     ))
                     # Adjust stop: add stop_adjustment to original stop
                     adj_pct = trade.parameter_snapshot.get("stop_adjustment_pct", 0.02)
-                    trade.stop_price = round(trade.entry_price * (1 - 0.02 + adj_pct), 4)
+                    trade.stop_price = round(
+                        trade.entry_price * (1 - 0.02 + adj_pct), 4
+                    )
                     trade.status = TradeStatus.PARTIALLY_CLOSED
                     trade.target_prices = targets[1:] if len(targets) > 1 else []
 
@@ -144,13 +166,19 @@ def run_backtest(
 
             if hit_stop and not hit_target:
                 exec_price = _execution_price(stop, profile.slippage_pct, direction=-1)
-                _close_trade(trade, today, exec_price, candle, TradeStatus.CLOSED_STOP, state, profile, "Stop hit")
+                _close_trade(
+                    trade, today, exec_price, candle, TradeStatus.CLOSED_STOP, state, profile,
+                    "Stop hit",
+                )
                 continue
 
             # Time-based exit
             if exit_date is not None and today >= exit_date:
                 exec_price = _execution_price(close_price, profile.slippage_pct, direction=-1)
-                _close_trade(trade, today, exec_price, candle, TradeStatus.CLOSED_TIME, state, profile, "Time exit")
+                _close_trade(
+                    trade, today, exec_price, candle, TradeStatus.CLOSED_TIME, state, profile,
+                    "Time exit",
+                )
                 continue
 
             still_open.append(trade)
@@ -160,16 +188,22 @@ def run_backtest(
         # --- Enter new signals ---
         for sig in pending.get(today, []):
             if len(state.open_trades) >= max_open_positions:
-                state.rejected_trades.append({"signal_id": sig.signal_id, "reason": "Max positions reached"})
+                state.rejected_trades.append(
+                    {"signal_id": sig.signal_id, "reason": "Max positions reached"}
+                )
                 continue
             if new_this_session >= max_new_positions_per_session:
-                state.rejected_trades.append({"signal_id": sig.signal_id, "reason": "Max new per session"})
+                state.rejected_trades.append(
+                    {"signal_id": sig.signal_id, "reason": "Max new per session"}
+                )
                 continue
 
             sym = sig.symbol
             candle = candle_map.get(sym, {}).get(today)
             if candle is None:
-                state.rejected_trades.append({"signal_id": sig.signal_id, "reason": "No candle on entry date"})
+                state.rejected_trades.append(
+                    {"signal_id": sig.signal_id, "reason": "No candle on entry date"}
+                )
                 continue
 
             entry_price = _execution_price(candle.open, profile.slippage_pct, direction=1)
@@ -185,11 +219,14 @@ def run_backtest(
                 continue
 
             qty = sizing.quantity
-            cost_dict = profile.compute(entry_price * qty, entry_price * qty)  # entry side only
+            # entry side only
+            cost_dict = profile.compute(entry_price * qty, entry_price * qty)
             total_entry_cost = entry_price * qty + cost_dict["total"] / 2
 
             if total_entry_cost > state.cash:
-                state.rejected_trades.append({"signal_id": sig.signal_id, "reason": "Insufficient cash"})
+                state.rejected_trades.append(
+                    {"signal_id": sig.signal_id, "reason": "Insufficient cash"}
+                )
                 continue
 
             state.cash -= total_entry_cost
@@ -220,11 +257,7 @@ def run_backtest(
             logger.debug(f"Entry {sym} qty={qty} @ {entry_price:.2f}")
 
         # Update equity
-        open_value = sum(
-            (candle_map.get(t.symbol, {}).get(today, None) or type("", (), {"close": t.entry_price})()).close
-            * t.remaining_quantity
-            for t in state.open_trades
-        )
+        open_value = _open_value(state.open_trades, candle_map, today)
         state.equity = state.cash + open_value
         state.equity_curve.append((today, state.equity))
 

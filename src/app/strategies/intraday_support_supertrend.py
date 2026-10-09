@@ -1,7 +1,6 @@
 """Strategy 1: Intraday Support Reclaim + Positive Supertrend."""
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from app.core.identifiers import signal_id
@@ -25,7 +24,7 @@ class IntradaySupportSupertrend(StrategyBase):
     @classmethod
     def default_params(cls) -> dict[str, Any]:
         return {
-            "mode": "SUPPORT_RECLAIM",          # SUPPORT_RECLAIM | SUPPORT_BOUNCE | RESISTANCE_BREAKOUT
+            "mode": "SUPPORT_RECLAIM",  # SUPPORT_RECLAIM | SUPPORT_BOUNCE | RESISTANCE_BREAKOUT
             "support_lookback": 20,
             "support_tolerance_pct": 0.005,
             "st_period": 10,
@@ -34,7 +33,7 @@ class IntradaySupportSupertrend(StrategyBase):
             "stop_pct": 0.02,
             "target1_pct": 0.02,
             "target1_partial_exit_pct": 0.50,
-            "stop_adjustment_mode": "FIXED_PCT_OF_ENTRY",  # adds 2% of entry to stop
+            "stop_adjustment_mode": "FIXED_PCT_OF_ENTRY",
             "stop_adjustment_pct": 0.02,
             "squareoff_time": "15:15",
         }
@@ -77,7 +76,7 @@ class IntradaySupportSupertrend(StrategyBase):
                 continue
 
             prev_low = lows[i - 1]
-            prev_close = closes[i - 1]
+            closes[i - 1]
             cur_close = closes[i]
 
             reasons: list[str] = []
@@ -96,9 +95,14 @@ class IntradaySupportSupertrend(StrategyBase):
                 else:
                     fails.append(f"Close {cur_close:.2f} did not reclaim support")
             elif mode == "SUPPORT_BOUNCE":
-                near = cur_close >= support and cur_close <= support * (1 + p["support_tolerance_pct"])
+                near = (
+                    cur_close >= support
+                    and cur_close <= support * (1 + p["support_tolerance_pct"])
+                )
                 if near:
-                    reasons.append(f"Close {cur_close:.2f} bouncing near support {support:.2f}")
+                    reasons.append(
+                        f"Close {cur_close:.2f} bouncing near support {support:.2f}"
+                    )
                 else:
                     fails.append("Price not bouncing near support")
             elif mode == "RESISTANCE_BREAKOUT":

@@ -16,7 +16,7 @@ def format_signal(sig: dict[str, Any]) -> str:
         f"<b>Strategy:</b> {sig.get('strategy_id', 'unknown')}",
         f"<b>Symbol:</b> {sig.get('symbol', 'unknown')}",
         f"<b>Signal date:</b> {sig.get('decision_timestamp', '')[:10]}",
-        f"<b>Planned execution:</b> Next session open",
+        "<b>Planned execution:</b> Next session open",
         f"<b>Entry ref:</b> {sig.get('entry_reference_price', 'N/A')}",
         f"<b>Initial stop:</b> {sig.get('stop_price', 'N/A')}",
         f"<b>Holding period:</b> {sig.get('holding_period_sessions', 'N/A')} sessions",
@@ -37,7 +37,10 @@ def format_daily_report(
 ) -> str:
     lines = [
         f"<b>Market AI Daily Report – {scan_date}</b>",
-        f"Universe: {universe_size} | Scanned: {scanned} | Rejected (data): {rejected_data_quality}",
+        (
+            f"Universe: {universe_size} | Scanned: {scanned}"
+            f" | Rejected (data): {rejected_data_quality}"
+        ),
         f"Signals found: {len(signals)}",
         "",
     ]

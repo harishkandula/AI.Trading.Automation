@@ -17,21 +17,28 @@ def compute_metrics(
     ambiguous_bar_count: int = 0,
     total_signals: int = 0,
 ) -> dict[str, Any]:
-    closed = [t for t in trades if t.status not in (TradeStatus.PENDING_ENTRY, TradeStatus.OPEN, TradeStatus.PARTIALLY_CLOSED)]
+    _open_statuses = (TradeStatus.PENDING_ENTRY, TradeStatus.OPEN, TradeStatus.PARTIALLY_CLOSED)
+    closed = [t for t in trades if t.status not in _open_statuses]
     if not closed:
         return {"error": "No closed trades", "total_signals": total_signals}
 
     pnls = [t.realized_pnl for t in closed]
     entries = [t.entry_price or 0.0 for t in closed]
-    entry_values = [p * t.entry_quantity for p, t in zip(entries, closed)]
+    [p * t.entry_quantity for p, t in zip(entries, closed, strict=False)]
 
     winners = [t for t in closed if t.realized_pnl > 0]
     losers = [t for t in closed if t.realized_pnl < 0]
     breakevens = [t for t in closed if t.realized_pnl == 0]
 
     win_rate = len(winners) / len(closed) if closed else 0.0
-    avg_win_pct = statistics.mean([(t.realized_pnl / (t.entry_price * t.entry_quantity)) for t in winners]) if winners else 0.0
-    avg_loss_pct = statistics.mean([(t.realized_pnl / (t.entry_price * t.entry_quantity)) for t in losers]) if losers else 0.0
+    avg_win_pct = (
+        statistics.mean([t.realized_pnl / (t.entry_price * t.entry_quantity) for t in winners])
+        if winners else 0.0
+    )
+    avg_loss_pct = (
+        statistics.mean([t.realized_pnl / (t.entry_price * t.entry_quantity) for t in losers])
+        if losers else 0.0
+    )
 
     gross_wins = sum(t.realized_pnl for t in winners)
     gross_losses = abs(sum(t.realized_pnl for t in losers))
@@ -89,8 +96,12 @@ def compute_metrics(
         "sharpe_ratio": round(sharpe, 3) if sharpe is not None else None,
         "max_consecutive_wins": max_con_win,
         "max_consecutive_losses": max_con_loss,
-        "avg_holding_sessions": round(statistics.mean(holding_periods), 1) if holding_periods else 0,
-        "median_holding_sessions": round(statistics.median(holding_periods), 1) if holding_periods else 0,
+        "avg_holding_sessions": (
+            round(statistics.mean(holding_periods), 1) if holding_periods else 0
+        ),
+        "median_holding_sessions": (
+            round(statistics.median(holding_periods), 1) if holding_periods else 0
+        ),
         "ambiguous_bar_count": ambiguous_bar_count,
         "profitable_months_pct": round(profitable_months, 1),
         "performance_by_year": {k: round(v, 2) for k, v in sorted(by_year.items())},

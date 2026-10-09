@@ -57,7 +57,9 @@ class RSISuperTrendVolume(StrategyBase):
         except InsufficientDataError:
             return []
         try:
-            st_results = supertrend(highs, lows, closes, self.params["st_period"], self.params["st_multiplier"])
+            st_results = supertrend(
+                highs, lows, closes, self.params["st_period"], self.params["st_multiplier"]
+            )
         except InsufficientDataError:
             return []
 
@@ -77,7 +79,9 @@ class RSISuperTrendVolume(StrategyBase):
 
             # RSI condition
             if p["rsi_min"] <= rsi_val <= p["rsi_max"]:
-                reasons.append(f"RSI({p['rsi_period']})={rsi_val:.1f} in [{p['rsi_min']},{p['rsi_max']}]")
+                reasons.append(
+                    f"RSI({p['rsi_period']})={rsi_val:.1f} in [{p['rsi_min']},{p['rsi_max']}]"
+                )
             else:
                 fails.append(f"RSI={rsi_val:.1f} outside [{p['rsi_min']},{p['rsi_max']}]")
 
@@ -102,9 +106,11 @@ class RSISuperTrendVolume(StrategyBase):
                     threshold = 1.25 * avg
                     vol_ok = volumes[i] >= threshold
                     if vol_ok:
-                        reasons.append(f"Volume {volumes[i]:.0f} >= 1.25x 10d avg {threshold:.0f}")
+                        reasons.append(
+                            f"Volume {volumes[i]:.0f} >= 1.25x 10d avg {threshold:.0f}"
+                        )
                     else:
-                        fails.append(f"Volume < 1.25x 10d avg")
+                        fails.append("Volume < 1.25x 10d avg")
             elif variant == "1.50x_20d":
                 avg = vol_avg_20[i]
                 if avg is not None:
@@ -113,7 +119,7 @@ class RSISuperTrendVolume(StrategyBase):
                     if vol_ok:
                         reasons.append(f"Volume {volumes[i]:.0f} >= 1.50x 20d avg {threshold:.0f}")
                     else:
-                        fails.append(f"Volume < 1.50x 20d avg")
+                        fails.append("Volume < 1.50x 20d avg")
 
             if fails:
                 continue
@@ -123,7 +129,9 @@ class RSISuperTrendVolume(StrategyBase):
             entry_date = next_trading_day(ts.date())
             entry_ref = candles[i].close
             stop = round(entry_ref * (1 - p["stop_pct"]), 4)
-            sid = signal_id(self.strategy_id, self.strategy_version, symbol, decision_ts.isoformat())
+            sid = signal_id(
+                self.strategy_id, self.strategy_version, symbol, decision_ts.isoformat()
+            )
 
             signals.append(Signal(
                 signal_id=sid,
@@ -135,11 +143,17 @@ class RSISuperTrendVolume(StrategyBase):
                 signal_timestamp=ts,
                 decision_timestamp=decision_ts,
                 planned_entry_type="NEXT_SESSION_OPEN",
-                planned_entry_timestamp=datetime(entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc),
+                planned_entry_timestamp=datetime(
+                    entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc
+                ),
                 entry_reference_price=entry_ref,
                 stop_price=stop,
                 holding_period_sessions=p["holding_sessions"],
-                indicators={"rsi": round(rsi_val, 2), "supertrend": round(st.value or 0, 2), "volume": volumes[i]},
+                indicators={
+                    "rsi": round(rsi_val, 2),
+                    "supertrend": round(st.value or 0, 2),
+                    "volume": volumes[i],
+                },
                 qualification_reasons=reasons,
                 risk_warnings=["Historical strategy evidence required before acting"],
                 parameter_snapshot=dict(self.params),

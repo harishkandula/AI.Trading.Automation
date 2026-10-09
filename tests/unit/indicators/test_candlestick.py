@@ -5,8 +5,8 @@ sys.path.insert(0, "src")
 from app.indicators.candlestick_patterns import CandleAttrs, is_morning_star
 
 
-def _candle(o, h, l, c):
-    return CandleAttrs(o, h, l, c)
+def _candle(o, h, lo, c):
+    return CandleAttrs(o, h, lo, c)
 
 
 def test_classic_morning_star():

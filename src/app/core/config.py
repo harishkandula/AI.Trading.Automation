@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 from pydantic import field_validator, model_validator
@@ -65,7 +64,7 @@ class Settings(BaseSettings):
         return False
 
     @model_validator(mode="after")
-    def _validate_safety(self) -> "Settings":
+    def _validate_safety(self) -> Settings:
         if self.trading_mode != "RESEARCH_ONLY":
             raise ValueError("TRADING_MODE must be RESEARCH_ONLY in this release")
         return self

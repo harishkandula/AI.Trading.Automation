@@ -27,7 +27,9 @@ def test_rsi_constant_series_gives_100():
 
 
 def test_rsi_range():
-    closes = [100, 102, 101, 103, 99, 98, 100, 105, 107, 104, 106, 108, 107, 109, 111, 113, 110, 112]
+    closes = [
+        100, 102, 101, 103, 99, 98, 100, 105, 107, 104, 106, 108, 107, 109, 111, 113, 110, 112
+    ]
     result = wilder_rsi([float(c) for c in closes], period=14)
     for v in result[14:]:
         assert 0 <= v <= 100
