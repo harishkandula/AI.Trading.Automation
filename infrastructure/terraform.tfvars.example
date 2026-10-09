@@ -1,3 +1,29 @@
-project = "market-ai"
+project     = "market-ai"
 environment = "dev"
-aws_region = "ap-south-1"
+aws_region  = "ap-south-1"
+
+# Optional – set if you want email alarms
+notification_email = ""
+
+# Docker image tag to deploy (set to your ECR image tag)
+ecr_image_tag = "latest"
+
+# Set true to provision ECS Fargate tasks (screener, backtest)
+# Requires vpc_id and private_subnet_ids to be set
+enable_ecs = false
+
+# Set true to provision RDS PostgreSQL
+# Requires vpc_id and private_subnet_ids to be set
+enable_rds = false
+
+# Required when enable_ecs or enable_rds = true
+# vpc_id             = "vpc-xxxxxxxxxxxxxxxxx"
+# private_subnet_ids = ["subnet-xxxxxxxxxxxxxxxxx", "subnet-xxxxxxxxxxxxxxxxx"]
+
+# RDS settings (only used when enable_rds = true)
+rds_instance_class    = "db.t4g.micro"
+rds_allocated_storage = 20
+rds_username          = "market_ai"
+
+# CloudWatch log retention
+log_retention_days = 30

@@ -1,0 +1,30 @@
+services:
+  market-ai:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=dev
+      - TRADING_MODE=RESEARCH_ONLY
+      - ENABLE_LIVE_ORDERS=false
+      - BROKER_PROVIDER=mock
+    volumes:
+      - ./reports:/app/reports
+    command: python -m scripts.validate_environment
+
+  backtest:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - TRADING_MODE=RESEARCH_ONLY
+      - ENABLE_LIVE_ORDERS=false
+    volumes:
+      - ./reports:/app/reports
+    command: >
+      python -m scripts.run_backtest
+        --strategy all
+        --universe mock
+        --start 2022-01-01
+        --end 2024-12-31
+        --output /app/reports/backtest_results.json
