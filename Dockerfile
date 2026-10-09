@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir -e ".[dev]" || pip install --no-cache-dir -e .
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY tests/ ./tests/
-COPY strategies/ ./strategies/
 
 ENV PYTHONPATH=/app/src
 ENV APP_ENV=prod

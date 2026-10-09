@@ -28,3 +28,8 @@ services:
         --start 2022-01-01
         --end 2024-12-31
         --output /app/reports/backtest_results.json
+
+  # screener: not yet implemented - placeholder for next milestone
+  # screener:
+  #   build: .
+  #   command: python -m scripts.run_screener --strategy all --universe mock

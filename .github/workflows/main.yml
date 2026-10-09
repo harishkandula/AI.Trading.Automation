@@ -1,7 +1,10 @@
-name: Deploy Market AI
+name: CI / Deploy Market AI
 
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
@@ -10,63 +13,118 @@ permissions:
 
 env:
   AWS_REGION: ap-south-1
+  PYTHON_VERSION: "3.12"
 
 jobs:
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # 1. Validate – runs on every push and PR
+  # ────────────────────────────────────────────────────────────────────────────
   validate:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run Tests
-        run: |
-          pytest -q
+      - name: Validate Environment
+        run: python -m scripts.validate_environment
+        env:
+          TRADING_MODE: RESEARCH_ONLY
+          ENABLE_LIVE_ORDERS: "false"
+          BROKER_PROVIDER: mock
 
       - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Run Tests
+        run: pytest -q
+        env:
+          TRADING_MODE: RESEARCH_ONLY
+          ENABLE_LIVE_ORDERS: "false"
+          BROKER_PROVIDER: mock
+
+      - name: Smoke-test Backtest (synthetic data)
         run: |
-          ruff check src/ tests/
+          python -m scripts.run_backtest \
+            --strategy all \
+            --universe mock \
+            --start 2023-01-01 \
+            --end 2024-06-30 \
+            --output reports/ci_backtest.json
+        env:
+          TRADING_MODE: RESEARCH_ONLY
+          ENABLE_LIVE_ORDERS: "false"
+          BROKER_PROVIDER: mock
 
       - name: Terraform Install
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Format Check
-        run: |
-          terraform -chdir=infrastructure fmt -check
+        run: terraform -chdir=infrastructure fmt -check
 
-  deploy:
-
-    needs: validate
-
+  # ────────────────────────────────────────────────────────────────────────────
+  # 2. Docker Build – runs on every push to main
+  # ────────────────────────────────────────────────────────────────────────────
+  docker-build:
     runs-on: ubuntu-latest
+    needs: validate
+    if: github.ref == 'refs/heads/main'
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            -t market-ai:${{ github.sha }} \
+            -t market-ai:latest \
+            .
+
+      - name: Smoke-test Docker Image
+        run: |
+          docker run --rm \
+            -e TRADING_MODE=RESEARCH_ONLY \
+            -e ENABLE_LIVE_ORDERS=false \
+            -e BROKER_PROVIDER=mock \
+            market-ai:latest
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 3. Deploy – runs on main only, requires prod environment approval
+  # ────────────────────────────────────────────────────────────────────────────
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [validate, docker-build]
+    if: github.ref == 'refs/heads/main'
     environment: prod
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
-      - name: Terraform Install
-        uses: hashicorp/setup-terraform@v3
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -75,18 +133,37 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: market-ai-${{ vars.ENVIRONMENT || 'dev' }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
       - name: Build Lambda Package
         run: |
           chmod +x scripts/build_lambda.sh
           ./scripts/build_lambda.sh
 
+      - name: Terraform Install
+        uses: hashicorp/setup-terraform@v3
+
       - name: Terraform Init
-        run: |
-          terraform -chdir=infrastructure init
+        run: terraform -chdir=infrastructure init
 
       - name: Terraform Plan
         run: |
           terraform -chdir=infrastructure plan \
+            -var="ecr_image_tag=${{ github.sha }}" \
             -out=tfplan
 
       - name: Terraform Apply
