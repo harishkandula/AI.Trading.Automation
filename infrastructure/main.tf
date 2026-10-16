@@ -6,6 +6,14 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  backend "s3" {
+    bucket         = "market-ai-tf-state-ap-south-1"
+    key            = "market-ai/dev/terraform.tfstate"
+    region         = "ap-south-1"
+    dynamodb_table = "market-ai-tf-locks"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
