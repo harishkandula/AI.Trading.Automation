@@ -66,10 +66,10 @@ class GrowwAuthManager:
 
     def refresh_token(self) -> str:
         """Generate a fresh Groww access token via TOTP and store it in Secrets Manager."""
-        totp_token = self._secret.get("totp_token", "")
+        totp_token = self._secret.get("totp_token") or self._secret.get("api_key", "")
         if not totp_token:
             raise ValueError(
-                "totp_token missing from secret — store your Groww TOTP API key "
+                "api_key missing from secret — store your Groww TOTP API key "
                 "(from groww.in/trade-api/api-keys → Generate TOTP token)"
             )
 

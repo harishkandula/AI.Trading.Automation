@@ -72,7 +72,7 @@ class TestRefreshToken:
 
     def test_raises_when_totp_token_missing(self):
         auth = _make_auth({"totp_secret": "JBSWY3DPEHPK3PXP"})
-        with pytest.raises(ValueError, match="totp_token"):
+        with pytest.raises(ValueError, match="api_key"):
             auth.refresh_token()
 
 
