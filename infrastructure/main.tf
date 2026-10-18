@@ -192,11 +192,33 @@ resource "aws_lambda_function" "jobs" {
   }
 }
 
+resource "aws_lambda_function" "backtest" {
+  function_name = "${local.name}-backtest"
+  role          = aws_iam_role.lambda.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+  timeout       = 300
+  memory_size   = 512
+
+  image_config {
+    command = ["market_ai.handlers.backtest.handler"]
+  }
+
+  environment {
+    variables = local.common_env
+  }
+}
+
 # ── CloudWatch Log Groups (Lambda) ────────────────────────────────────────────
 
 resource "aws_cloudwatch_log_group" "lambda" {
   for_each          = aws_lambda_function.jobs
   name              = "/aws/lambda/${each.value.function_name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_cloudwatch_log_group" "backtest" {
+  name              = "/aws/lambda/${aws_lambda_function.backtest.function_name}"
   retention_in_days = var.log_retention_days
 }
 
@@ -226,6 +248,12 @@ resource "aws_cloudwatch_event_rule" "token_refresh" {
   schedule_expression = "cron(30 0 ? * * *)"
 }
 
+resource "aws_cloudwatch_event_rule" "backtest" {
+  name                = "${local.name}-backtest"
+  description         = "11:00 IST Sunday weekly full backtest"
+  schedule_expression = "cron(30 5 ? * SUN *)"
+}
+
 locals {
   event_mappings = {
     morning       = aws_cloudwatch_event_rule.morning
@@ -250,6 +278,19 @@ resource "aws_lambda_permission" "events" {
   source_arn    = each.value.arn
 }
 
+resource "aws_cloudwatch_event_target" "backtest" {
+  rule = aws_cloudwatch_event_rule.backtest.name
+  arn  = aws_lambda_function.backtest.arn
+}
+
+resource "aws_lambda_permission" "backtest" {
+  statement_id  = "AllowEventBridge-backtest"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.backtest.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.backtest.arn
+}
+
 # ── CloudWatch Alarms – Lambda failures ───────────────────────────────────────
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
@@ -268,6 +309,23 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
 
   dimensions = {
     FunctionName = each.value.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "backtest_errors" {
+  alarm_name          = "${aws_lambda_function.backtest.function_name}-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Lambda ${aws_lambda_function.backtest.function_name} produced errors"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.backtest.function_name
   }
 }
 
