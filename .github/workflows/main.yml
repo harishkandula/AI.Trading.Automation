@@ -100,7 +100,8 @@ jobs:
             -e TRADING_MODE=RESEARCH_ONLY \
             -e ENABLE_LIVE_ORDERS=false \
             -e BROKER_PROVIDER=mock \
-            market-ai:latest
+            --entrypoint python \
+            market-ai:latest -c "from market_ai.handlers.morning import handler; print('import ok')"
 
   # ────────────────────────────────────────────────────────────────────────────
   # 3. Deploy – runs on main only, requires prod environment approval
@@ -133,17 +134,20 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Build Lambda Package
-        run: |
-          chmod +x scripts/build_lambda.sh
-          ./scripts/build_lambda.sh
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Upload Lambda ZIP to S3
+      - name: Build and Push Docker Image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: market-ai-dev
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          BUCKET="market-ai-tf-state-ap-south-1"
-          aws s3 cp build/lambda.zip "s3://$BUCKET/lambda/lambda-${{ github.sha }}.zip"
-          HASH=$(openssl dgst -sha256 -binary build/lambda.zip | openssl base64)
-          echo "LAMBDA_HASH=$HASH" >> $GITHUB_ENV
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
       - name: Terraform Install
         uses: hashicorp/setup-terraform@v3
@@ -157,25 +161,7 @@ jobs:
             -var="ecr_image_tag=${{ github.sha }}" \
             -var="telegram_bot_token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
             -var="telegram_chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -var="lambda_source_hash=${{ env.LAMBDA_HASH }}" \
             -out=tfplan
 
       - name: Terraform Apply
-        run: |
-          terraform -chdir=infrastructure apply \
-            -auto-approve tfplan
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and Push Docker Image to ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: market-ai-${{ vars.ENVIRONMENT || 'dev' }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        run: terraform -chdir=infrastructure apply -auto-approve tfplan

@@ -176,15 +176,16 @@ resource "aws_lambda_function" "jobs" {
     token_refresh = "market_ai.handlers.token_refresh.handler"
   }
 
-  function_name    = "${local.name}-${each.key}"
-  role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = each.value
-  s3_bucket        = "market-ai-tf-state-ap-south-1"
-  s3_key           = "lambda/lambda-${var.ecr_image_tag}.zip"
-  source_code_hash = var.lambda_source_hash
-  timeout          = 120
-  memory_size      = 512
+  function_name = "${local.name}-${each.key}"
+  role          = aws_iam_role.lambda.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+  timeout       = 120
+  memory_size   = 512
+
+  image_config {
+    command = [each.value]
+  }
 
   environment {
     variables = local.common_env
