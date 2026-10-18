@@ -168,9 +168,10 @@ resource "aws_iam_role_policy" "lambda" {
 
 resource "aws_lambda_function" "jobs" {
   for_each = {
-    morning = "market_ai.handlers.morning.handler"
-    evening = "market_ai.handlers.evening.handler"
-    weekly  = "market_ai.handlers.weekly.handler"
+    morning       = "market_ai.handlers.morning.handler"
+    evening       = "market_ai.handlers.evening.handler"
+    weekly        = "market_ai.handlers.weekly.handler"
+    token_refresh = "market_ai.handlers.token_refresh.handler"
   }
 
   function_name    = "${local.name}-${each.key}"
@@ -215,11 +216,18 @@ resource "aws_cloudwatch_event_rule" "weekly" {
   schedule_expression = "cron(30 4 ? * SUN *)"
 }
 
+resource "aws_cloudwatch_event_rule" "token_refresh" {
+  name                = "${local.name}-token-refresh"
+  description         = "06:00 IST Mon-Fri Groww token refresh"
+  schedule_expression = "cron(30 0 ? * MON-FRI *)"
+}
+
 locals {
   event_mappings = {
-    morning = aws_cloudwatch_event_rule.morning
-    evening = aws_cloudwatch_event_rule.evening
-    weekly  = aws_cloudwatch_event_rule.weekly
+    morning       = aws_cloudwatch_event_rule.morning
+    evening       = aws_cloudwatch_event_rule.evening
+    weekly        = aws_cloudwatch_event_rule.weekly
+    token_refresh = aws_cloudwatch_event_rule.token_refresh
   }
 }
 
