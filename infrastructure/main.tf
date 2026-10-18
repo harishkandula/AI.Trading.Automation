@@ -218,8 +218,8 @@ resource "aws_cloudwatch_event_rule" "weekly" {
 
 resource "aws_cloudwatch_event_rule" "token_refresh" {
   name                = "${local.name}-token-refresh"
-  description         = "06:00 IST Mon-Fri Groww token refresh"
-  schedule_expression = "cron(30 0 ? * MON-FRI *)"
+  description         = "06:00 IST every day Groww token refresh"
+  schedule_expression = "cron(30 0 ? * * *)"
 }
 
 locals {
