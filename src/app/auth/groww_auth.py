@@ -75,6 +75,21 @@ class GrowwAuthManager:
 
         from growwapi import GrowwAPI  # type: ignore[import-untyped]  # lazy — installed in Lambda
 
+        # Intercept requests to log the raw Groww response body before the SDK hides it
+        import requests as _requests
+
+        _orig_post = _requests.post
+
+        def _logging_post(url: str, **kwargs: object) -> object:
+            resp = _orig_post(url, **kwargs)  # type: ignore[arg-type]
+            try:
+                log.info("Groww raw response %s: %s", resp.status_code, resp.text[:500])
+            except Exception:
+                pass
+            return resp
+
+        _requests.post = _logging_post  # type: ignore[assignment]
+
         # Generate TOTP immediately before the API call to avoid window expiry
         totp_code = self.generate_totp()
         log.info("Calling GrowwAPI.get_access_token (totp_code=%s)", totp_code)
@@ -83,6 +98,8 @@ class GrowwAuthManager:
         except Exception as exc:
             log.error("get_access_token failed — totp=%s error=%s", totp_code, exc)
             raise
+        finally:
+            _requests.post = _orig_post  # type: ignore[assignment]
         if not access_token:
             raise ValueError("GrowwAPI.get_access_token returned empty token")
 
