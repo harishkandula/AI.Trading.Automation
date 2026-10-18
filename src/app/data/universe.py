@@ -35,7 +35,7 @@ NIFTY50_SYMBOLS: list[str] = [
     "JSWSTEEL.NS",
     "KOTAKBANK.NS",
     "LT.NS",
-    "M&M.NS",
+    "M&M.NS",  # yfinance accepts M&M.NS directly
     "MARUTI.NS",
     "NESTLEIND.NS",
     "NTPC.NS",
