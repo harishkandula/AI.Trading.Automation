@@ -73,14 +73,21 @@ class GrowwAuthManager:
                 "(from groww.in/trade-api/api-keys → Generate TOTP token)"
             )
 
-        totp_code = self.generate_totp()
         from growwapi import GrowwAPI  # type: ignore[import-untyped]  # lazy — installed in Lambda
-        access_token = GrowwAPI.get_access_token(api_key=totp_token, totp=totp_code)
+
+        # Generate TOTP immediately before the API call to avoid window expiry
+        totp_code = self.generate_totp()
+        log.info("Calling GrowwAPI.get_access_token (totp_code=%s)", totp_code)
+        try:
+            access_token = GrowwAPI.get_access_token(api_key=totp_token, totp=totp_code)
+        except Exception as exc:
+            log.error("get_access_token failed — totp=%s error=%s", totp_code, exc)
+            raise
         if not access_token:
             raise ValueError("GrowwAPI.get_access_token returned empty token")
 
         self._update_secret({"access_token": access_token})
-        log.info("Groww access_token refreshed (prefix=%s…)", access_token[:8])
+        log.info("Groww access_token refreshed (prefix=%s…)", str(access_token)[:8])
         return access_token
 
     def get_token(self) -> str:
