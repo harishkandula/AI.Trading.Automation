@@ -1,10 +1,11 @@
-"""Lambda handler — daily Groww Bearer token refresh.
+"""Lambda handler — validate the Groww Bearer token is present and readable.
 
-Scheduled at 00:30 UTC (06:00 IST) Mon-Fri via EventBridge.
+The Groww Trade API token is static (generated from the dashboard) and stored
+manually in Secrets Manager. This handler simply verifies it is accessible —
+no HTTP login or TOTP generation occurs.
 """
 from __future__ import annotations
 
-import json
 import logging
 
 log = logging.getLogger(__name__)
@@ -12,15 +13,22 @@ log.setLevel(logging.INFO)
 
 
 def handler(event: dict, context: object) -> dict:  # noqa: ARG001
-    """Refresh the Groww access token and store it in Secrets Manager."""
+    """Check that the Groww access token is readable from Secrets Manager."""
     try:
         from app.auth.groww_auth import GrowwAuthManager
 
         auth = GrowwAuthManager()
-        token = auth.refresh_token()
-        # Log a redacted prefix for auditability.
-        log.info("Groww token refreshed successfully (prefix=%s…)", token[:8])
-        return {"statusCode": 200, "body": "Token refreshed"}
+        token = auth.get_token()
+        log.info("Groww token is present (prefix=%s…)", token[:8])
+        return {"statusCode": 200, "body": "Groww token OK"}
     except Exception as exc:
-        log.error("Token refresh failed: %s", exc, exc_info=True)
-        return {"statusCode": 500, "body": json.dumps({"error": str(exc)})}
+        log.error("Groww token check failed: %s", exc)
+        return {
+            "statusCode": 500,
+            "body": (
+                "Groww token missing. Store it with: "
+                "aws secretsmanager put-secret-value "
+                "--secret-id market-ai-dev/groww "
+                "--secret-string '{\"access_token\":\"<your-token>\"}'"
+            ),
+        }
