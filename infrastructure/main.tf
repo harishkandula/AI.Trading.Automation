@@ -180,7 +180,7 @@ resource "aws_lambda_function" "jobs" {
   role             = aws_iam_role.lambda.arn
   runtime          = "python3.12"
   handler          = each.value
-  s3_bucket        = aws_s3_bucket.data.id
+  s3_bucket        = "market-ai-tf-state-ap-south-1"
   s3_key           = "lambda/lambda-${var.ecr_image_tag}.zip"
   source_code_hash = var.lambda_source_hash
   timeout          = 120

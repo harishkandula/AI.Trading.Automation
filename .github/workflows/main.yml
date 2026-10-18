@@ -140,10 +140,7 @@ jobs:
 
       - name: Upload Lambda ZIP to S3
         run: |
-          BUCKET=$(aws s3api list-buckets \
-            --query "Buckets[?starts_with(Name,'market-ai-dev-data-')].Name | [0]" \
-            --output text)
-          echo "LAMBDA_BUCKET=$BUCKET" >> $GITHUB_ENV
+          BUCKET="market-ai-tf-state-ap-south-1"
           aws s3 cp build/lambda.zip "s3://$BUCKET/lambda/lambda-${{ github.sha }}.zip"
           HASH=$(openssl dgst -sha256 -binary build/lambda.zip | openssl base64)
           echo "LAMBDA_HASH=$HASH" >> $GITHUB_ENV
