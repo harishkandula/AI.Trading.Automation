@@ -97,7 +97,6 @@ class YFinanceProvider(MarketDataProvider):
                 interval=interval,
                 auto_adjust=True,
                 progress=False,
-                multi_level_column=False,
             )
         except Exception:
             log.warning("yfinance download failed for %s", symbol, exc_info=True)
@@ -106,6 +105,10 @@ class YFinanceProvider(MarketDataProvider):
         if df is None or df.empty:
             log.warning("yfinance returned no data for %s (%s – %s)", symbol, start, end)
             return []
+
+        # Older yfinance returns MultiIndex columns like ("Close", "TICKER") for single tickers
+        if hasattr(df.columns, "levels"):
+            df.columns = df.columns.get_level_values(0)
 
         inst_id = _symbol_to_instrument_id(symbol)
         candles: list[Candle] = []
