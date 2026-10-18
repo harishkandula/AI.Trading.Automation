@@ -99,3 +99,9 @@ variable "telegram_chat_id" {
   description = "Telegram chat ID for notifications (injected from CI secrets)"
   sensitive   = true
 }
+
+variable "lambda_source_hash" {
+  type        = string
+  default     = ""
+  description = "Base64-encoded SHA256 of the Lambda ZIP (used to trigger redeployment)"
+}

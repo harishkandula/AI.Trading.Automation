@@ -176,14 +176,15 @@ resource "aws_lambda_function" "jobs" {
     token_refresh = "market_ai.handlers.token_refresh.handler"
   }
 
-  function_name    = "${local.name}-${each.key}"
-  role             = aws_iam_role.lambda.arn
-  runtime          = "python3.12"
-  handler          = each.value
-  filename         = "${path.module}/../build/lambda.zip"
-  source_code_hash = filebase64sha256("${path.module}/../build/lambda.zip")
-  timeout          = 120
-  memory_size      = 512
+  function_name     = "${local.name}-${each.key}"
+  role              = aws_iam_role.lambda.arn
+  runtime           = "python3.12"
+  handler           = each.value
+  s3_bucket         = aws_s3_bucket.data.id
+  s3_key            = "lambda/lambda-${var.ecr_image_tag}.zip"
+  source_code_hash  = var.lambda_source_hash
+  timeout           = 120
+  memory_size       = 512
 
   environment {
     variables = local.common_env

@@ -4,7 +4,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 rm -rf "$ROOT/build"
 mkdir -p "$ROOT/build/package"
 
-# Install all runtime dependencies (and the package itself) into the package dir
+# Install all runtime dependencies into the package dir
 pip install --quiet --target "$ROOT/build/package" "$ROOT"
 
 # Copy source packages on top so handlers are importable at the top level
