@@ -159,7 +159,7 @@ resource "aws_iam_role_policy" "lambda" {
       },
       {
         Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
+        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
         Resource = "arn:aws:secretsmanager:${var.aws_region}:*:secret:${local.name}/*"
       }
     ]
@@ -351,7 +351,7 @@ resource "aws_iam_role_policy" "ecs_task" {
       },
       {
         Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
+        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
         Resource = "arn:aws:secretsmanager:${var.aws_region}:*:secret:${local.name}/*"
       },
       {
