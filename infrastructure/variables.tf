@@ -85,3 +85,17 @@ variable "log_retention_days" {
   default     = 30
   description = "CloudWatch log retention in days"
 }
+
+variable "telegram_bot_token" {
+  type        = string
+  default     = ""
+  description = "Telegram bot token for notifications (injected from CI secrets)"
+  sensitive   = true
+}
+
+variable "telegram_chat_id" {
+  type        = string
+  default     = ""
+  description = "Telegram chat ID for notifications (injected from CI secrets)"
+  sensitive   = true
+}

@@ -31,6 +31,8 @@ locals {
     LIVE_ORDER_PLACEMENT = "false"
     ENABLE_LIVE_ORDERS   = "false"
     BROKER_PROVIDER      = "mock"
+    TELEGRAM_BOT_TOKEN   = var.telegram_bot_token
+    TELEGRAM_CHAT_ID     = var.telegram_chat_id
   }
 }
 

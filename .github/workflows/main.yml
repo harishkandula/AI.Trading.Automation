@@ -148,6 +148,8 @@ jobs:
         run: |
           terraform -chdir=infrastructure plan \
             -var="ecr_image_tag=${{ github.sha }}" \
+            -var="telegram_bot_token=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+            -var="telegram_chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
             -out=tfplan
 
       - name: Terraform Apply
