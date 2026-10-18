@@ -56,7 +56,7 @@ class GrowwBroker:
         ``ltp``, ``pnl``.
         """
         try:
-            data = self._get("/portfolio/holdings")
+            data = self._get("/holdings/user")
             raw = data.get("data") or data.get("holdings") or []
             holdings: list[dict] = []
             for item in raw:
@@ -81,7 +81,7 @@ class GrowwBroker:
         ``ltp``, ``pnl``, ``product``.
         """
         try:
-            data = self._get("/portfolio/positions")
+            data = self._get("/positions/user")
             raw = data.get("data") or data.get("positions") or []
             positions: list[dict] = []
             for item in raw:
