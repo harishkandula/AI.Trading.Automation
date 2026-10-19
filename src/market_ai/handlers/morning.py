@@ -26,6 +26,10 @@ _WARMUP_DAYS = 100
 
 def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     """AWS Lambda entry-point for the morning scan (07:00 IST Mon-Fri)."""
+    if isinstance(event, dict) and event.get("_prewarm"):
+        log.info("Pre-warm ping received — container ready")
+        return {"statusCode": 200, "body": "warm"}
+
     today = datetime.now(tz=IST).date()
 
     try:

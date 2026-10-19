@@ -101,21 +101,18 @@ class YFinanceProvider(MarketDataProvider):
                     auto_adjust=True,
                     progress=False,
                 )
-                if df is not None and not df.empty:
-                    break
-                log.warning(
-                    "yfinance returned no data for %s (attempt %d/3) (%s – %s)",
-                    symbol, attempt, start, end,
-                )
+                # Empty DataFrame means Yahoo returned 404 / symbol not found —
+                # retrying won't help, so break immediately rather than sleeping.
+                break
             except Exception:
                 log.warning(
-                    "yfinance download failed for %s (attempt %d/3)", symbol, attempt, exc_info=True
+                    "yfinance download error for %s (attempt %d/3)", symbol, attempt, exc_info=True
                 )
-            if attempt < 3:
-                _time.sleep(2 ** attempt)  # 2 s, 4 s
+                if attempt < 3:
+                    _time.sleep(2 ** attempt)  # 2 s, 4 s
 
         if df is None or df.empty:
-            log.warning("No candles for %s after 3 attempts", symbol)
+            log.warning("No candles for %s", symbol)
             return []
 
         # Older yfinance returns MultiIndex columns like ("Close", "TICKER") for single tickers

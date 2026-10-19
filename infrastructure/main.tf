@@ -291,6 +291,50 @@ resource "aws_lambda_permission" "backtest" {
   source_arn    = aws_cloudwatch_event_rule.backtest.arn
 }
 
+# ── Pre-warm rules (2 min before morning and evening) ────────────────────────
+# Fires a {_prewarm: true} ping so the container is already warm when the real
+# scan invocation arrives, eliminating the ~10 s cold-start INIT timeout.
+
+resource "aws_cloudwatch_event_rule" "prewarm_morning" {
+  name                = "${local.name}-prewarm-morning"
+  description         = "06:58 IST Mon-Fri pre-warm for morning Lambda"
+  schedule_expression = "cron(28 1 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_rule" "prewarm_evening" {
+  name                = "${local.name}-prewarm-evening"
+  description         = "18:58 IST Mon-Fri pre-warm for evening Lambda"
+  schedule_expression = "cron(28 13 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_target" "prewarm_morning" {
+  rule  = aws_cloudwatch_event_rule.prewarm_morning.name
+  arn   = aws_lambda_function.jobs["morning"].arn
+  input = jsonencode({ _prewarm = true })
+}
+
+resource "aws_cloudwatch_event_target" "prewarm_evening" {
+  rule  = aws_cloudwatch_event_rule.prewarm_evening.name
+  arn   = aws_lambda_function.jobs["evening"].arn
+  input = jsonencode({ _prewarm = true })
+}
+
+resource "aws_lambda_permission" "prewarm_morning" {
+  statement_id  = "AllowEventBridge-prewarm-morning"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.jobs["morning"].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.prewarm_morning.arn
+}
+
+resource "aws_lambda_permission" "prewarm_evening" {
+  statement_id  = "AllowEventBridge-prewarm-evening"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.jobs["evening"].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.prewarm_evening.arn
+}
+
 # ── CloudWatch Alarms – Lambda failures ───────────────────────────────────────
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
