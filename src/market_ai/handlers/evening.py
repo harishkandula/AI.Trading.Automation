@@ -37,8 +37,10 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     today = datetime.now(tz=IST).date()
     start = today - timedelta(days=_WARMUP_DAYS)
 
+    import os  # noqa: PLC0415
     provider = YFinanceProvider()
-    symbols = get_universe("nifty50")
+    universe_name = os.environ.get("UNIVERSE", "nifty50")
+    symbols = get_universe(universe_name)
     strategies = all_strategies()
 
     all_signals = []

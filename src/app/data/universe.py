@@ -126,7 +126,8 @@ _UNIVERSES: dict[str, list[str]] = {
 def get_universe(name: str) -> list[str]:
     """Return the symbol list for a named universe.
 
-    Supported names: ``"nifty50"``, ``"nifty_next50"``, ``"mock"``.
+    Supported names: ``"nifty50"``, ``"nifty_next50"``, ``"mock"``,
+    or a ``"+"`` joined combination e.g. ``"nifty50+nifty_next50"``.
 
     Raises
     ------
@@ -134,6 +135,24 @@ def get_universe(name: str) -> list[str]:
         If *name* is not a recognised universe identifier.
     """
     key = name.lower()
+
+    # Combined universe: "nifty50+nifty_next50"
+    if "+" in key:
+        symbols: list[str] = []
+        seen: set[str] = set()
+        for part in key.split("+"):
+            part = part.strip()
+            if part not in _UNIVERSES:
+                raise ValueError(
+                    f"Unknown universe {part!r} in combined spec {name!r}. "
+                    f"Valid choices: {sorted(_UNIVERSES)}"
+                )
+            for sym in _UNIVERSES[part]:
+                if sym not in seen:
+                    seen.add(sym)
+                    symbols.append(sym)
+        return symbols
+
     if key not in _UNIVERSES:
         raise ValueError(
             f"Unknown universe {name!r}. "

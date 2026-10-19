@@ -33,6 +33,7 @@ locals {
     BROKER_PROVIDER      = "mock"
     TELEGRAM_BOT_TOKEN   = var.telegram_bot_token
     TELEGRAM_CHAT_ID     = var.telegram_chat_id
+    UNIVERSE             = var.universe
   }
 }
 

@@ -99,3 +99,9 @@ variable "telegram_chat_id" {
   description = "Telegram chat ID for notifications (injected from CI secrets)"
   sensitive   = true
 }
+
+variable "universe" {
+  type        = string
+  default     = "nifty50"
+  description = "Symbol universe: nifty50, nifty_next50, or nifty50+nifty_next50"
+}
