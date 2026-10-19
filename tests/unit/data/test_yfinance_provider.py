@@ -40,9 +40,11 @@ def _make_ohlcv_df(rows: list[dict]) -> pd.DataFrame:
 
 
 def _make_yf_mock(df: pd.DataFrame) -> MagicMock:
-    """Return a MagicMock that behaves like the yfinance module."""
+    """Return a MagicMock that behaves like the yfinance module (Ticker.history API)."""
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = df
     mock_yf = MagicMock()
-    mock_yf.download.return_value = df
+    mock_yf.Ticker.return_value = mock_ticker
     return mock_yf
 
 
@@ -139,7 +141,7 @@ class TestGetHistoricalCandles:
 
     def test_returns_empty_list_on_yfinance_error(self):
         mock_yf = MagicMock()
-        mock_yf.download.side_effect = RuntimeError("network error")
+        mock_yf.Ticker.side_effect = RuntimeError("network error")
 
         with patch(_YF_TARGET, mock_yf):
             provider = YFinanceProvider()

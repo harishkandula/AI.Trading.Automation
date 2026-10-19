@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import time as _time
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -90,26 +89,20 @@ class YFinanceProvider(MarketDataProvider):
             log.warning("Unsupported timeframe %s for yfinance; returning []", timeframe)
             return []
 
-        df = None
-        for attempt in range(1, 4):
-            try:
-                df = yf.download(
-                    tickers=symbol,
-                    start=start.isoformat(),
-                    end=end.isoformat(),
-                    interval=interval,
-                    auto_adjust=True,
-                    progress=False,
-                )
-                # Empty DataFrame means Yahoo returned 404 / symbol not found —
-                # retrying won't help, so break immediately rather than sleeping.
-                break
-            except Exception:
-                log.warning(
-                    "yfinance download error for %s (attempt %d/3)", symbol, attempt, exc_info=True
-                )
-                if attempt < 3:
-                    _time.sleep(2 ** attempt)  # 2 s, 4 s
+        # Ticker.history() avoids the quoteSummary endpoint that returns 404
+        # for some active NSE symbols (e.g. TATAMOTORS.NS, ZOMATO.NS) when
+        # called via yf.download().
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(
+                start=start.isoformat(),
+                end=end.isoformat(),
+                interval=interval,
+                auto_adjust=True,
+            )
+        except Exception:
+            log.warning("yfinance fetch failed for %s", symbol, exc_info=True)
+            return []
 
         if df is None or df.empty:
             log.warning("No candles for %s", symbol)
