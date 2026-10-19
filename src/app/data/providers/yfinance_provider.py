@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time as _time
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -89,21 +90,32 @@ class YFinanceProvider(MarketDataProvider):
             log.warning("Unsupported timeframe %s for yfinance; returning []", timeframe)
             return []
 
-        try:
-            df = yf.download(
-                tickers=symbol,
-                start=start.isoformat(),
-                end=end.isoformat(),
-                interval=interval,
-                auto_adjust=True,
-                progress=False,
-            )
-        except Exception:
-            log.warning("yfinance download failed for %s", symbol, exc_info=True)
-            return []
+        df = None
+        for attempt in range(1, 4):
+            try:
+                df = yf.download(
+                    tickers=symbol,
+                    start=start.isoformat(),
+                    end=end.isoformat(),
+                    interval=interval,
+                    auto_adjust=True,
+                    progress=False,
+                )
+                if df is not None and not df.empty:
+                    break
+                log.warning(
+                    "yfinance returned no data for %s (attempt %d/3) (%s – %s)",
+                    symbol, attempt, start, end,
+                )
+            except Exception:
+                log.warning(
+                    "yfinance download failed for %s (attempt %d/3)", symbol, attempt, exc_info=True
+                )
+            if attempt < 3:
+                _time.sleep(2 ** attempt)  # 2 s, 4 s
 
         if df is None or df.empty:
-            log.warning("yfinance returned no data for %s (%s – %s)", symbol, start, end)
+            log.warning("No candles for %s after 3 attempts", symbol)
             return []
 
         # Older yfinance returns MultiIndex columns like ("Close", "TICKER") for single tickers
