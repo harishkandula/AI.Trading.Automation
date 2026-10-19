@@ -53,10 +53,10 @@ def _make_yf_mock(df: pd.DataFrame) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 class TestGetInstruments:
-    def test_returns_fifty_instruments(self):
+    def test_returns_nifty50_instruments(self):
         provider = YFinanceProvider()
         instruments = provider.get_instruments()
-        assert len(instruments) == 50
+        assert len(instruments) == len(NIFTY50_SYMBOLS)
 
     def test_all_instruments_are_nse(self):
         provider = YFinanceProvider()

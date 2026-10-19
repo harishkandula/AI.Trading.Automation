@@ -47,14 +47,12 @@ NIFTY50_SYMBOLS: list[str] = [
     "SHRIRAMFIN.NS",
     "SUNPHARMA.NS",
     "TATACONSUM.NS",
-    "TATAMOTORS.NS",
     "TATASTEEL.NS",
     "TCS.NS",
     "TECHM.NS",
     "TITAN.NS",
     "ULTRACEMCO.NS",
     "WIPRO.NS",
-    "ZOMATO.NS",
 ]
 
 # ---------------------------------------------------------------------------
