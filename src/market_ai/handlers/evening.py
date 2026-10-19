@@ -58,7 +58,11 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
                 try:
                     signals = strategy.generate_signals(symbol, candles)
                     for sig in signals:
-                        if sig.signal_timestamp.date() == today:
+                        entry_date = (
+                            sig.planned_entry_timestamp.date()
+                            if sig.planned_entry_timestamp else sig.signal_timestamp.date()
+                        )
+                        if entry_date == today:
                             all_signals.append(sig)
                 except Exception:
                     log.warning("Strategy %s failed on %s", _sid, symbol, exc_info=True)
