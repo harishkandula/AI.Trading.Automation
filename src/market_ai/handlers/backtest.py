@@ -83,12 +83,15 @@ def _run_backtest(event: Any, today: date) -> dict:
     universe_name: str = evt.get("universe", "nifty500")
     capital: float = float(evt.get("capital", 100_000.0))
     step_months: int = int(evt.get("step_months", 6))
+    strategy_filter: str = evt.get("strategy", "")
 
     symbols = _resolve_universe(universe_name)
-    strategy_ids = [
-        sid for sid in all_ids()
-        if not _is_intraday(sid)
-    ]
+    all_daily_ids = [sid for sid in all_ids() if not _is_intraday(sid)]
+    strategy_ids = (
+        [s.strip() for s in strategy_filter.split(",") if s.strip()]
+        if strategy_filter
+        else all_daily_ids
+    )
 
     log.info(
         "Backtest %s: universe=%s (%d symbols) train=%s test=%s→%s strategies=%d",

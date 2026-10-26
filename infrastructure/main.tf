@@ -254,8 +254,8 @@ resource "aws_lambda_function" "backtest" {
   role          = aws_iam_role.lambda.arn
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
-  timeout       = 300
-  memory_size   = 512
+  timeout       = 900
+  memory_size   = 1024
 
   image_config {
     command = ["market_ai.handlers.backtest.handler"]
