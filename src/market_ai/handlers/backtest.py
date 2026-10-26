@@ -13,29 +13,21 @@ Event payload (all keys optional):
         "test_start":   "2023-01-01",   # first OOS window; default start + 4 years
         "universe":     "nifty500",     # "nifty50" | "nifty500"; default "nifty500"
         "capital":      100000.0,       # initial capital per window; default 100 000
-        "step_months":  6               # walk-forward window size; default 6
+        "step_months":  6,              # walk-forward window size; default 6
+        "strategy":     "s01_rs_momentum"  # comma-separated; default all daily strategies
     }
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import boto3  # type: ignore[import-untyped]
-
-from app.backtesting.leaderboard import write_result as _leaderboard_write
-from app.backtesting.runner import run_universe_backtest
-from app.backtesting.walk_forward import WalkForwardResult, run_walk_forward
-from app.data.nifty500_symbols import all_symbols as _nifty500_symbols
-from app.data.providers.hybrid_provider import HybridDataProvider
-from app.models.candle import Timeframe
-from app.notifications import telegram as _telegram
-from app.notifications.notifier import Notifier
-from app.strategies.registry import all_ids
+# No module-level heavy imports (pandas, boto3, strategies) — Lambda cold start
+# was timing out at 10 s loading them all. Everything is imported lazily inside
+# the functions that need them.
 
 log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -55,6 +47,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     except Exception as exc:
         log.exception("Backtest handler fatal error")
         try:
+            from app.notifications.notifier import Notifier  # noqa: PLC0415
             notifier = Notifier.from_secrets()
             notifier.send_error_alert("backtest_handler", str(exc))
         except Exception:
@@ -66,6 +59,8 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
 
 
 def _run_backtest(event: Any, today: date) -> dict:
+    from app.strategies.registry import all_ids  # noqa: PLC0415
+
     evt = event if isinstance(event, dict) else {}
     mode: str = evt.get("mode", "walk_forward")
 
@@ -109,6 +104,7 @@ def _run_backtest(event: Any, today: date) -> dict:
         )
         msg = _format_walk_forward_summary(run_date, start, test_start, end, universe_name, s3_keys)
     else:
+        from app.backtesting.runner import run_universe_backtest  # noqa: PLC0415
         results = run_universe_backtest(
             symbols=symbols,
             strategy_ids=strategy_ids,
@@ -140,6 +136,22 @@ def _run_backtest(event: Any, today: date) -> dict:
     }
 
 
+def _s3_available_symbols(bucket: str) -> set[str]:
+    """Return the set of symbols that have a Parquet file in S3 (one ListObjects call)."""
+    import boto3  # noqa: PLC0415
+    s3 = boto3.client("s3")
+    symbols: set[str] = set()
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix="ohlcv/daily/"):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]  # ohlcv/daily/SYMBOL.parquet
+            name = key.split("/")[-1]
+            if name.endswith(".parquet"):
+                symbols.add(name[:-8])  # strip .parquet
+    log.info("S3 inventory: %d symbols have Parquet files", len(symbols))
+    return symbols
+
+
 def _run_walk_forward_all(
     strategy_ids: list[str],
     symbols: list[str],
@@ -153,30 +165,39 @@ def _run_walk_forward_all(
     today: date,
 ) -> dict[str, str]:
     """Fetch candles once, run walk-forward per strategy, save results to S3."""
-    from datetime import timedelta as _td
+    from app.backtesting.leaderboard import write_result as _leaderboard_write  # noqa: PLC0415
+    from app.backtesting.walk_forward import run_walk_forward  # noqa: PLC0415
+    from app.data.providers.hybrid_provider import HybridDataProvider  # noqa: PLC0415
+    from app.models.candle import Timeframe  # noqa: PLC0415
+
+    # One ListObjects call to find which symbols actually have data in S3.
+    # Avoids 500 individual GetObject calls for symbols that don't exist yet.
+    available = _s3_available_symbols(bucket) if bucket else set()
+    symbols_to_fetch = [
+        sym.removesuffix(".NS") for sym in symbols
+        if sym.removesuffix(".NS") in available
+    ] if available else [sym.removesuffix(".NS") for sym in symbols]
+
+    log.info(
+        "Symbols in universe: %d, have S3 data: %d, skipping: %d",
+        len(symbols), len(symbols_to_fetch), len(symbols) - len(symbols_to_fetch),
+    )
 
     # fill_gaps=False: read only from S3, no Groww/yfinance calls.
-    # All data was loaded by the backfill pipeline; external API calls across
-    # 500 symbols cause timeouts and log noise.
     provider = HybridDataProvider(fill_gaps=False)
-    # Warmup buffer requests pre-anchor data; clamp to 2019-01-01 since that is
-    # the earliest date in S3. Requesting earlier triggers 500 gap-fill attempts.
-    fetch_start = max(train_anchor - _td(days=_WARMUP_BUFFER_DAYS), date(2019, 1, 1))
+    # Clamp to 2019-01-01 — earliest date in S3.
+    fetch_start = max(train_anchor - timedelta(days=_WARMUP_BUFFER_DAYS), date(2019, 1, 1))
 
-    # Fetch candles once for all strategies
     candles_by_symbol: dict[str, Any] = {}
-    for sym in symbols:
-        bare = sym.removesuffix(".NS")
+    for bare in symbols_to_fetch:
         try:
             bars = provider.get_historical_candles(bare, Timeframe.D1, fetch_start, test_end)
             if bars:
                 candles_by_symbol[bare] = bars
-            else:
-                log.warning("No candles for %s", bare)
         except Exception:
             log.warning("Candle fetch failed: %s", bare, exc_info=True)
 
-    log.info("Loaded candles for %d / %d symbols", len(candles_by_symbol), len(symbols))
+    log.info("Loaded candles for %d / %d symbols", len(candles_by_symbol), len(symbols_to_fetch))
 
     s3_keys: dict[str, str] = {}
     for strategy_id in strategy_ids:
@@ -202,7 +223,6 @@ def _run_walk_forward_all(
                 result.aggregated.get("avg_sharpe") or 0,
                 (result.aggregated.get("consistency_score") or 0) * 100,
             )
-            # Persist to leaderboard DynamoDB table (non-fatal if table not configured)
             try:
                 s3_key = s3_keys.get(strategy_id, "")
                 _leaderboard_write(
@@ -226,10 +246,10 @@ def _run_walk_forward_all(
 
 
 def _is_intraday(strategy_id: str) -> bool:
-    from app.strategies.registry import get
+    from app.strategies.registry import get  # noqa: PLC0415
     try:
         cls = get(strategy_id)
-        from app.models.candle import Timeframe as TF
+        from app.models.candle import Timeframe as TF  # noqa: PLC0415
         return cls.timeframe == TF.M5
     except Exception:
         return False
@@ -237,11 +257,12 @@ def _is_intraday(strategy_id: str) -> bool:
 
 def _resolve_universe(name: str) -> list[str]:
     if name == "nifty500":
-        return _nifty500_symbols()
+        from app.data.nifty500_symbols import all_symbols  # noqa: PLC0415
+        return all_symbols()
     if name == "nifty50":
-        from app.data.nifty500_symbols import all_symbols
+        from app.data.nifty500_symbols import all_symbols  # noqa: PLC0415
         return all_symbols(segment="LARGE_CAP")[:50]
-    from app.data.universe import get_universe
+    from app.data.universe import get_universe  # noqa: PLC0415
     return get_universe(name)
 
 
@@ -253,11 +274,9 @@ def _data_bucket() -> str:
     return os.environ.get("DATA_BUCKET", "")
 
 
-def _save_walk_forward_to_s3(
-    bucket: str,
-    run_date: str,
-    result: WalkForwardResult,
-) -> str:
+def _save_walk_forward_to_s3(bucket: str, run_date: str, result: Any) -> str:
+    import json  # noqa: PLC0415
+    import boto3  # noqa: PLC0415
     s3 = boto3.client("s3")
     key = f"{_S3_PREFIX}/walk_forward/{run_date}/{result.strategy_id}.json"
     payload: dict[str, Any] = {
@@ -296,6 +315,8 @@ def _save_walk_forward_to_s3(
 
 
 def _save_simple_to_s3(bucket: str, run_date: str, results: dict[str, Any]) -> dict[str, str]:
+    import json  # noqa: PLC0415
+    import boto3  # noqa: PLC0415
     s3 = boto3.client("s3")
     keys: dict[str, str] = {}
     for strategy_id, result in results.items():
@@ -317,6 +338,8 @@ def _save_simple_to_s3(bucket: str, run_date: str, results: dict[str, Any]) -> d
 # ---------------------------------------------------------------------------
 
 def _send_telegram(message: str) -> None:
+    from app.notifications import telegram as _telegram  # noqa: PLC0415
+    from app.notifications.notifier import Notifier  # noqa: PLC0415
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
     if bot_token and chat_id:
