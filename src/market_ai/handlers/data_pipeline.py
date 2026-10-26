@@ -85,7 +85,8 @@ def _load_checkpoint() -> date | None:
     if not table_name:
         return None
     try:
-        table = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "ap-south-1")).Table(table_name)
+        dynamo = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "ap-south-1"))
+        table = dynamo.Table(table_name)
         item = table.get_item(Key={"pk": _BACKFILL_PK, "sk": _BACKFILL_SK}).get("Item")
         if item and item.get("last_chunk_end"):
             return date.fromisoformat(str(item["last_chunk_end"]))
@@ -101,7 +102,8 @@ def _save_checkpoint(chunk_end: date) -> None:
     if not table_name:
         return
     try:
-        table = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "ap-south-1")).Table(table_name)
+        dynamo = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "ap-south-1"))
+        table = dynamo.Table(table_name)
         table.put_item(Item={
             "pk": _BACKFILL_PK,
             "sk": _BACKFILL_SK,
@@ -150,7 +152,10 @@ def _run_backfill(event: dict) -> dict:
         checkpoint = _load_checkpoint()
         if checkpoint:
             start = checkpoint + timedelta(days=1)
-            log.info("Resuming backfill from checkpoint: last completed %s, starting %s", checkpoint, start)
+            log.info(
+                "Resuming backfill from checkpoint: last completed %s, starting %s",
+                checkpoint, start,
+            )
         else:
             start = date(2019, 1, 1)
             log.info("No checkpoint found, starting from %s", start)
