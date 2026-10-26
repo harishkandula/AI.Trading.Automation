@@ -97,8 +97,8 @@ def _run_backfill(event: dict) -> dict:
     store = ParquetStore(bucket)
     symbols = set(all_symbols())
 
-    start_str = event.get("start", "2019-01-01")
-    end_str = event.get("end", str(date.today()))
+    start_str = event.get("start") or "2019-01-01"
+    end_str = event.get("end") or str(date.today())
     # step_days controls how many calendar days this single invocation covers.
     # Default 90 days ≈ one quarter; well within the 900s Lambda timeout.
     step_days = int(event.get("step_days", 90))
