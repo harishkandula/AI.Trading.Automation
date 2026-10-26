@@ -26,7 +26,24 @@ _NSE_HOLIDAYS_2025: set[date] = {
     date(2025, 8, 27), date(2025, 10, 2), date(2025, 10, 20), date(2025, 10, 21),
     date(2025, 11, 5), date(2025, 12, 25),
 }
-_NSE_HOLIDAYS: set[date] = _NSE_HOLIDAYS_2024 | _NSE_HOLIDAYS_2025
+# NSE publishes the definitive holiday list by November each year.
+# 2026 dates below are best-effort estimates; update from the official NSE circular
+# once published: https://www.nseindia.com/products-services/equity-market-holidays
+_NSE_HOLIDAYS_2026: set[date] = {
+    date(2026, 1, 26),   # Republic Day
+    date(2026, 2, 17),   # Maha Shivratri (approx)
+    date(2026, 3, 20),   # Holi (approx)
+    date(2026, 4, 3),    # Good Friday
+    date(2026, 4, 14),   # Dr. B.R. Ambedkar Jayanti
+    date(2026, 5, 1),    # Maharashtra Day / Labour Day
+    date(2026, 8, 15),   # Independence Day
+    date(2026, 9, 1),    # Ganesh Chaturthi (approx)
+    date(2026, 10, 2),   # Gandhi Jayanti
+    date(2026, 10, 8),   # Dussehra (approx)
+    date(2026, 11, 5),   # Diwali / Guru Nanak Jayanti (approx)
+    date(2026, 12, 25),  # Christmas
+}
+_NSE_HOLIDAYS: set[date] = _NSE_HOLIDAYS_2024 | _NSE_HOLIDAYS_2025 | _NSE_HOLIDAYS_2026
 
 
 def is_trading_day(d: date) -> bool:

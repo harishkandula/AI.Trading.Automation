@@ -93,28 +93,32 @@ def _format_signal_block(sig: Signal) -> str:
 
 
 def format_signal_alert(signals: list[Signal], scan_date: date) -> str:
-    """Rich HTML message for Telegram listing multiple signals.
+    """Rich HTML message for Telegram listing signals ranked by score.
 
-    Groups by strategy. Truncated to Telegram's 4096-char limit.
+    Signals are expected to be pre-sorted by score (highest first).
+    Truncated to Telegram's 4096-char limit.
     """
     header = (
         f"<b>Market AI — Signal Alert</b>\n"
-        f"Date: {scan_date}  |  Signals: {len(signals)}\n"
+        f"Date: {scan_date}  |  Signals: {len(signals)}\n\n"
     )
 
-    # Group by strategy
-    by_strategy: dict[str, list[Signal]] = {}
-    for sig in signals:
-        by_strategy.setdefault(sig.strategy_id, []).append(sig)
+    blocks: list[str] = []
+    for rank, sig in enumerate(signals, 1):
+        score = sig.indicators.get("score")
+        score_str = f" [Score: {score}]" if score is not None else ""
+        regime = sig.indicators.get("regime", "")
+        regime_str = f" | Regime: {regime}" if regime else ""
+        rs = sig.indicators.get("rs_percentile")
+        rs_str = f" | RS: {rs:.0f}th" if rs is not None else ""
+        block = (
+            f"<b>{rank}. {sig.symbol.replace('.NS', '')}</b>"
+            f"{score_str}{regime_str}{rs_str}\n"
+            f"{_format_signal_block(sig)}"
+        )
+        blocks.append(block)
 
-    sections: list[str] = []
-    for strategy_id, grp in by_strategy.items():
-        section_lines = [f"\n<b>Strategy: {strategy_id}</b>"]
-        for sig in grp:
-            section_lines.append(_format_signal_block(sig))
-        sections.append("\n".join(section_lines))
-
-    body = "\n".join(sections)
+    body = "\n\n".join(blocks)
     full = header + body + DISCLAIMER
 
     if len(full) > _TELEGRAM_MAX_CHARS:

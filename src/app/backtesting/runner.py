@@ -1,8 +1,9 @@
 """
 Universe-level backtest runner.
 
-Fetches OHLCV data via YFinanceProvider, generates signals for every symbol in
-the universe, then runs the event-driven engine once per strategy.
+Fetches OHLCV data via HybridDataProvider (S3 Parquet → Groww → NSE Bhavcopy),
+generates signals for every symbol in the universe, then runs the event-driven
+engine once per strategy.
 
 No look-ahead: identical to production signal generation — the engine processes
 bars in chronological order and signals only enter on the *next* bar's open.
@@ -15,7 +16,7 @@ from typing import Any
 
 from app.backtesting.engine import run_backtest
 from app.backtesting.metrics import compute_metrics
-from app.data.providers.yfinance_provider import YFinanceProvider
+from app.data.providers.hybrid_provider import HybridDataProvider
 from app.models.candle import Timeframe
 from app.models.trade import Trade
 
@@ -24,6 +25,10 @@ import app.strategies.gap_up_volume  # noqa: F401
 import app.strategies.intraday_support_supertrend  # noqa: F401
 import app.strategies.morning_star  # noqa: F401
 import app.strategies.rsi_supertrend_volume  # noqa: F401
+import app.strategies.s00_benchmark  # noqa: F401
+import app.strategies.s01_rs_momentum  # noqa: F401
+import app.strategies.s02_vcp  # noqa: F401
+import app.strategies.s03_trend_pullback  # noqa: F401
 
 from app.strategies.registry import get as _get_strategy
 
@@ -40,6 +45,7 @@ def run_universe_backtest(
     end: date,
     initial_capital: float = 100_000.0,
     cost_profile: str = "default_delivery_estimate",
+    provider: HybridDataProvider | None = None,
 ) -> dict[str, Any]:
     """
     Back-test each requested strategy over the given universe.
@@ -47,7 +53,7 @@ def run_universe_backtest(
     Parameters
     ----------
     symbols:
-        NSE ticker symbols (e.g. ``["RELIANCE.NS", "INFY.NS"]``).
+        NSE ticker symbols (e.g. ``["RELIANCE", "INFY"]``).
     strategy_ids:
         Registry IDs of strategies to run.  Intraday strategies that need 5-minute
         candles are skipped automatically.
@@ -59,13 +65,17 @@ def run_universe_backtest(
     cost_profile:
         Cost model key passed to the engine
         (``"default_delivery_estimate"`` or ``"zero_cost"``).
+    provider:
+        Optional HybridDataProvider instance (injected for testing).
 
     Returns
     -------
     dict[strategy_id, {"metrics": dict, "trades": list[dict], "signals_count": int,
     "symbols_scanned": int}]
     """
-    provider = YFinanceProvider()
+    if provider is None:
+        provider = HybridDataProvider()
+
     fetch_start = start - timedelta(days=_WARMUP_BUFFER_DAYS)
 
     # ------------------------------------------------------------------ #
@@ -73,14 +83,15 @@ def run_universe_backtest(
     # ------------------------------------------------------------------ #
     candles_by_symbol: dict[str, list[Any]] = {}
     for symbol in symbols:
+        bare = symbol.removesuffix(".NS")
         try:
-            bars = provider.get_historical_candles(symbol, Timeframe.D1, fetch_start, end)
+            bars = provider.get_historical_candles(bare, Timeframe.D1, fetch_start, end)
             if bars:
-                candles_by_symbol[symbol] = bars
+                candles_by_symbol[bare] = bars
             else:
-                log.warning("No candles returned for %s", symbol)
+                log.warning("No candles returned for %s", bare)
         except Exception:
-            log.warning("Failed to fetch candles for %s", symbol, exc_info=True)
+            log.warning("Failed to fetch candles for %s", bare, exc_info=True)
 
     log.info(
         "Fetched candles for %d / %d symbols", len(candles_by_symbol), len(symbols)

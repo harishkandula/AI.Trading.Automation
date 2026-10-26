@@ -27,6 +27,7 @@ locals {
     APP_ENV              = var.environment
     DATA_BUCKET          = aws_s3_bucket.data.id
     STATE_TABLE          = aws_dynamodb_table.state.name
+    LEADERBOARD_TABLE    = aws_dynamodb_table.leaderboard.name
     TRADING_MODE         = "RESEARCH_ONLY"
     LIVE_ORDER_PLACEMENT = "false"
     ENABLE_LIVE_ORDERS   = "false"
@@ -71,6 +72,32 @@ resource "aws_s3_bucket_public_access_block" "data" {
 
 resource "aws_dynamodb_table" "state" {
   name         = "${local.name}-state"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+}
+
+# ── DynamoDB – Leaderboard ───────────────────────────────────────────────────
+
+resource "aws_dynamodb_table" "leaderboard" {
+  name         = "${local.name}-leaderboard"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
@@ -150,13 +177,17 @@ resource "aws_iam_role_policy" "lambda" {
       },
       {
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
         Resource = ["${aws_s3_bucket.data.arn}", "${aws_s3_bucket.data.arn}/*"]
       },
       {
-        Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
-        Resource = aws_dynamodb_table.state.arn
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query",
+          "dynamodb:UpdateItem", "dynamodb:Scan"]
+        Resource = [
+          aws_dynamodb_table.state.arn,
+          aws_dynamodb_table.leaderboard.arn,
+        ]
       },
       {
         Effect   = "Allow"
@@ -175,6 +206,7 @@ resource "aws_lambda_function" "jobs" {
     evening       = "market_ai.handlers.evening.handler"
     weekly        = "market_ai.handlers.weekly.handler"
     token_refresh = "market_ai.handlers.token_refresh.handler"
+    data_pipeline = "market_ai.handlers.data_pipeline.handler"
   }
 
   function_name = "${local.name}-${each.key}"
@@ -191,6 +223,28 @@ resource "aws_lambda_function" "jobs" {
   environment {
     variables = local.common_env
   }
+}
+
+resource "aws_lambda_function" "data_pipeline_extended" {
+  function_name = "${local.name}-data-pipeline-backfill"
+  role          = aws_iam_role.lambda.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+  timeout       = 900
+  memory_size   = 1024
+
+  image_config {
+    command = ["market_ai.handlers.data_pipeline.handler"]
+  }
+
+  environment {
+    variables = local.common_env
+  }
+}
+
+resource "aws_cloudwatch_log_group" "data_pipeline_backfill" {
+  name              = "/aws/lambda/${aws_lambda_function.data_pipeline_extended.function_name}"
+  retention_in_days = var.log_retention_days
 }
 
 resource "aws_lambda_function" "backtest" {
@@ -249,6 +303,12 @@ resource "aws_cloudwatch_event_rule" "token_refresh" {
   schedule_expression = "cron(30 0 ? * * *)"
 }
 
+resource "aws_cloudwatch_event_rule" "data_pipeline" {
+  name                = "${local.name}-data-pipeline"
+  description         = "04:00 IST Mon-Fri daily bhavcopy fetch and indicator computation"
+  schedule_expression = "cron(30 22 ? * SUN-THU *)"
+}
+
 resource "aws_cloudwatch_event_rule" "backtest" {
   name                = "${local.name}-backtest"
   description         = "11:00 IST Sunday weekly full backtest"
@@ -261,6 +321,7 @@ locals {
     evening       = aws_cloudwatch_event_rule.evening
     weekly        = aws_cloudwatch_event_rule.weekly
     token_refresh = aws_cloudwatch_event_rule.token_refresh
+    data_pipeline = aws_cloudwatch_event_rule.data_pipeline
   }
 }
 
@@ -374,6 +435,66 @@ resource "aws_cloudwatch_metric_alarm" "backtest_errors" {
   }
 }
 
+# ── Leaderboard Lambda + Schedule ────────────────────────────────────────────
+
+resource "aws_lambda_function" "leaderboard" {
+  function_name = "${local.name}-leaderboard"
+  role          = aws_iam_role.lambda.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+  timeout       = 60
+  memory_size   = 256
+
+  image_config {
+    command = ["market_ai.handlers.leaderboard.handler"]
+  }
+
+  environment {
+    variables = local.common_env
+  }
+}
+
+resource "aws_cloudwatch_log_group" "leaderboard" {
+  name              = "/aws/lambda/${aws_lambda_function.leaderboard.function_name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_cloudwatch_event_rule" "leaderboard" {
+  name                = "${local.name}-leaderboard"
+  description         = "12:30 IST Sunday — strategy leaderboard after backtest completes"
+  schedule_expression = "cron(0 7 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "leaderboard" {
+  rule = aws_cloudwatch_event_rule.leaderboard.name
+  arn  = aws_lambda_function.leaderboard.arn
+}
+
+resource "aws_lambda_permission" "leaderboard" {
+  statement_id  = "AllowEventBridge-leaderboard"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.leaderboard.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.leaderboard.arn
+}
+
+resource "aws_cloudwatch_metric_alarm" "leaderboard_errors" {
+  alarm_name          = "${aws_lambda_function.leaderboard.function_name}-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Lambda ${aws_lambda_function.leaderboard.function_name} produced errors"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.leaderboard.function_name
+  }
+}
+
 # ── Secrets Manager placeholders ─────────────────────────────────────────────
 # Values must be populated manually or via CI/CD – never in Terraform state.
 
@@ -444,7 +565,7 @@ resource "aws_iam_role_policy" "ecs_task" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
         Resource = ["${aws_s3_bucket.data.arn}", "${aws_s3_bucket.data.arn}/*"]
       },
       {
@@ -639,6 +760,11 @@ output "ecr_repository_url" {
 output "lambda_names" {
   value       = { for k, v in aws_lambda_function.jobs : k => v.function_name }
   description = "Lambda function names"
+}
+
+output "leaderboard_table" {
+  value       = aws_dynamodb_table.leaderboard.name
+  description = "DynamoDB leaderboard table name"
 }
 
 output "groww_secret_arn" {

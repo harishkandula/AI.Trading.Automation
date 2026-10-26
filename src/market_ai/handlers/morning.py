@@ -19,7 +19,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     + numpy + yfinance together take ~9 s to import on a cold container.
     """
     # --- deferred imports (keep INIT phase < 1 s) ---
-    from app.data.providers.yfinance_provider import YFinanceProvider  # noqa: PLC0415
+    from app.data.providers.hybrid_provider import HybridDataProvider  # noqa: PLC0415
     from app.data.universe import get_universe  # noqa: PLC0415
     from app.models.candle import Timeframe  # noqa: PLC0415
     from app.notifications.notifier import Notifier  # noqa: PLC0415
@@ -27,7 +27,15 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     import app.strategies.intraday_support_supertrend  # noqa: F401, PLC0415
     import app.strategies.morning_star  # noqa: F401, PLC0415
     import app.strategies.rsi_supertrend_volume  # noqa: F401, PLC0415
+    import app.strategies.s00_benchmark  # noqa: F401, PLC0415
+    import app.strategies.s01_rs_momentum  # noqa: F401, PLC0415
+    import app.strategies.s02_vcp  # noqa: F401, PLC0415
+    import app.strategies.s03_trend_pullback  # noqa: F401, PLC0415
     from app.strategies.registry import all_strategies  # noqa: PLC0415
+    from app.research.scoring import StrategyFamily, score_signal  # noqa: PLC0415
+    from app.research.regime import MarketRegime  # noqa: PLC0415
+    from app.risk.engine import RiskConfig, RiskGuard, PortfolioSnapshot  # noqa: PLC0415
+    from app.data.nifty500_symbols import SYMBOL_TO_SECTOR, SYMBOL_TO_SEGMENT  # noqa: PLC0415
 
     if isinstance(event, dict) and event.get("_prewarm"):
         log.info("Pre-warm ping received — container ready")
@@ -37,7 +45,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     start = today - timedelta(days=_WARMUP_DAYS)
 
     import os  # noqa: PLC0415
-    provider = YFinanceProvider()
+    provider = HybridDataProvider()
     universe_name = os.environ.get("UNIVERSE", "nifty50")
     symbols = get_universe(universe_name)
     strategies = all_strategies()
@@ -75,15 +83,78 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             log.warning("Failed to process %s", symbol, exc_info=True)
             errors += 1
 
+    # Score and rank signals (best-effort — missing RS data gets neutral score)
+    _FAMILY_MAP = {
+        "s00_benchmark": StrategyFamily.MOMENTUM,
+        "s01_rs_momentum": StrategyFamily.MOMENTUM,
+        "s02_vcp": StrategyFamily.BREAKOUT,
+        "s03_trend_pullback": StrategyFamily.PULLBACK,
+        "rsi_supertrend_volume": StrategyFamily.MOMENTUM,
+        "gap_up_volume": StrategyFamily.BREAKOUT,
+        "morning_star": StrategyFamily.PULLBACK,
+        "intraday_support_supertrend": StrategyFamily.MOMENTUM,
+    }
+    # Detect multi-family confluence per symbol
+    families_by_symbol: dict[str, list[str]] = {}
+    for sig in all_signals:
+        fam = _FAMILY_MAP.get(sig.strategy_id, StrategyFamily.MOMENTUM).value
+        families_by_symbol.setdefault(sig.symbol, []).append(fam)
+
+    scored_signals = []
+    for sig in all_signals:
+        try:
+            fam = _FAMILY_MAP.get(sig.strategy_id, StrategyFamily.MOMENTUM)
+            rel_vol = sig.indicators.get("rel_vol", 1.0)
+            score = score_signal(
+                symbol=sig.symbol,
+                strategy_id=sig.strategy_id,
+                family=fam,
+                regime=MarketRegime.UNKNOWN,   # regime computed separately; UNKNOWN = neutral
+                rs_percentile=None,
+                sector_rank=None,
+                relative_volume=float(rel_vol),
+                families_triggered=families_by_symbol.get(sig.symbol, []),
+            )
+            sig.indicators["score"] = score.total
+            sig.indicators["score_breakdown"] = {
+                "regime": score.regime_score,
+                "rs": score.rs_score,
+                "sector": score.sector_score,
+                "setup": score.setup_score,
+                "confluence": score.confluence_bonus,
+            }
+        except Exception:
+            log.debug("Scoring failed for %s", sig.symbol, exc_info=True)
+        scored_signals.append(sig)
+
+    # Sort by score descending
+    scored_signals.sort(key=lambda s: s.indicators.get("score", 0), reverse=True)
+
+    # Apply portfolio risk guards
+    portfolio = PortfolioSnapshot(equity=float(os.environ.get("PORTFOLIO_EQUITY", "500000")))
+    guard = RiskGuard(RiskConfig(), portfolio)
+    approved_signals = []
+    rejected_by_risk = 0
+    for sig in scored_signals:
+        sector = SYMBOL_TO_SECTOR.get(sig.symbol, "UNKNOWN")
+        segment = SYMBOL_TO_SEGMENT.get(sig.symbol, "UNKNOWN")
+        decision = guard.check(sig, sector=sector, segment=segment)
+        if decision.approved:
+            approved_signals.append(sig)
+        else:
+            rejected_by_risk += 1
+            log.info("Risk rejected %s: %s", sig.symbol, decision.reason)
+    scored_signals = approved_signals
+
     try:
         notifier = Notifier.from_secrets()
-        if all_signals:
-            notifier.send_signal_alert(all_signals)
+        if scored_signals:
+            notifier.send_signal_alert(scored_signals)
         notifier.send_daily_summary(
             scan_date=today,
             universe_size=len(symbols),
             scanned=scanned,
-            signals=all_signals,
+            signals=scored_signals,
             errors=errors,
         )
     except Exception:
@@ -95,7 +166,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             "scan_date": today.isoformat(),
             "universe_size": len(symbols),
             "scanned": scanned,
-            "signals": len(all_signals),
+            "signals": len(scored_signals),
             "errors": errors,
         },
     }

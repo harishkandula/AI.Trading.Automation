@@ -20,7 +20,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     """
     # --- deferred imports (keep INIT phase < 1 s) ---
     from app.brokers.groww_broker import GrowwBroker  # noqa: PLC0415
-    from app.data.providers.yfinance_provider import YFinanceProvider  # noqa: PLC0415
+    from app.data.providers.hybrid_provider import HybridDataProvider  # noqa: PLC0415
     from app.data.universe import get_universe  # noqa: PLC0415
     from app.models.candle import Timeframe  # noqa: PLC0415
     from app.notifications.notifier import Notifier  # noqa: PLC0415
@@ -38,7 +38,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     start = today - timedelta(days=_WARMUP_DAYS)
 
     import os  # noqa: PLC0415
-    provider = YFinanceProvider()
+    provider = HybridDataProvider()
     universe_name = os.environ.get("UNIVERSE", "nifty50")
     symbols = get_universe(universe_name)
     strategies = all_strategies()

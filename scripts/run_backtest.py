@@ -30,12 +30,47 @@ import app.strategies.gap_up_volume  # noqa: F401
 import app.strategies.intraday_support_supertrend  # noqa: F401
 import app.strategies.morning_star  # noqa: F401
 import app.strategies.rsi_supertrend_volume  # noqa: F401
+import app.strategies.s00_benchmark  # noqa: F401
+import app.strategies.s01_rs_momentum  # noqa: F401
+import app.strategies.s02_vcp  # noqa: F401
+import app.strategies.s03_trend_pullback  # noqa: F401
 
 from app.strategies.registry import all_ids
 
 configure_logging()
 logger = get_logger(__name__)
 settings = get_settings()
+
+
+def _make_mock_provider(symbols: list[str], start: date, end: date) -> object:
+    """Return a lightweight mock provider that generates synthetic trending candles."""
+    from datetime import datetime, timedelta
+    from unittest.mock import MagicMock
+    from app.models.candle import Candle, Timeframe
+    from zoneinfo import ZoneInfo
+
+    IST = ZoneInfo("Asia/Kolkata")
+
+    def _candles(symbol: str, tf: object, s: date, e: date) -> list[Candle]:
+        days = (e - s).days + 250  # include warmup
+        result = []
+        for i in range(days):
+            d = s - timedelta(days=250) + timedelta(days=i)
+            if d.weekday() >= 5:
+                continue
+            price = 100.0 + i * 0.05
+            ts = datetime(d.year, d.month, d.day, 9, 15, tzinfo=IST)
+            result.append(Candle(
+                instrument_id=symbol, exchange="NSE", trading_symbol=symbol,
+                timeframe=Timeframe.D1, timestamp=ts,
+                open=price * 0.998, high=price * 1.01, low=price * 0.99,
+                close=price, volume=1_000_000 + i * 500, source="mock",
+            ))
+        return result
+
+    provider = MagicMock()
+    provider.get_historical_candles.side_effect = _candles
+    return provider
 
 
 def main() -> None:
@@ -78,6 +113,12 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     from app.backtesting.runner import run_universe_backtest  # noqa: PLC0415
 
+    # For the mock universe (CI smoke-test), inject synthetic candles so no
+    # S3/Groww/Bhavcopy calls are made (DATA_BUCKET may not be set in CI).
+    provider = None
+    if args.universe == "mock":
+        provider = _make_mock_provider(symbols, start, end)
+
     results = run_universe_backtest(
         symbols=symbols,
         strategy_ids=strategy_ids,
@@ -85,6 +126,7 @@ def main() -> None:
         end=end,
         initial_capital=args.capital,
         cost_profile=args.cost_profile,
+        provider=provider,
     )
 
     # ------------------------------------------------------------------ #
