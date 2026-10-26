@@ -183,7 +183,7 @@ resource "aws_iam_role_policy" "lambda" {
       {
         Effect = "Allow"
         Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query",
-          "dynamodb:UpdateItem", "dynamodb:Scan"]
+        "dynamodb:UpdateItem", "dynamodb:Scan"]
         Resource = [
           aws_dynamodb_table.state.arn,
           aws_dynamodb_table.leaderboard.arn,
