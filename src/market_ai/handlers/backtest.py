@@ -188,6 +188,8 @@ def _run_walk_forward_all(
     # Clamp to 2019-01-01 — earliest date in S3.
     fetch_start = max(train_anchor - timedelta(days=_WARMUP_BUFFER_DAYS), date(2019, 1, 1))
 
+    import time  # noqa: PLC0415
+    t0 = time.monotonic()
     candles_by_symbol: dict[str, Any] = {}
     for bare in symbols_to_fetch:
         try:
@@ -197,11 +199,15 @@ def _run_walk_forward_all(
         except Exception:
             log.warning("Candle fetch failed: %s", bare, exc_info=True)
 
-    log.info("Loaded candles for %d / %d symbols", len(candles_by_symbol), len(symbols_to_fetch))
+    log.info(
+        "Loaded candles for %d / %d symbols in %.1fs",
+        len(candles_by_symbol), len(symbols_to_fetch), time.monotonic() - t0,
+    )
 
     s3_keys: dict[str, str] = {}
     for strategy_id in strategy_ids:
         try:
+            t1 = time.monotonic()
             result = run_walk_forward(
                 strategy_id=strategy_id,
                 candles_by_symbol=candles_by_symbol,
@@ -217,11 +223,12 @@ def _run_walk_forward_all(
                 if key:
                     s3_keys[strategy_id] = key
             log.info(
-                "Walk-forward %s: validated=%s sharpe=%.2f consistency=%.0f%%",
+                "Walk-forward %s: validated=%s sharpe=%.2f consistency=%.0f%% in %.1fs",
                 strategy_id,
                 result.aggregated.get("validated"),
                 result.aggregated.get("avg_sharpe") or 0,
                 (result.aggregated.get("consistency_score") or 0) * 100,
+                time.monotonic() - t1,
             )
             try:
                 s3_key = s3_keys.get(strategy_id, "")
