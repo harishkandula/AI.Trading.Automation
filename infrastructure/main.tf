@@ -20,6 +20,8 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
   name = "${var.project}-${var.environment}"
 
@@ -41,7 +43,7 @@ locals {
 # ── S3 ────────────────────────────────────────────────────────────────────────
 
 resource "aws_s3_bucket" "data" {
-  bucket = "${local.name}-data"
+  bucket = "${local.name}-data-${data.aws_caller_identity.current.account_id}"
 }
 
 resource "aws_s3_bucket_versioning" "data" {
