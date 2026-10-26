@@ -77,21 +77,23 @@ def _run_daily(target_date: date) -> dict:
 def _run_backfill(event: dict) -> dict:
     """Backfill historical bhavcopy data for a date range.
 
-    The Lambda timeout is 900 s. To handle multi-year backfills, invoke this
-    function repeatedly with increasing start dates, or use step_days to control
-    how much each invocation covers. The response includes next_start so the
-    caller can chain invocations.
+    The Lambda timeout is 900 s. Strategy: fetch all trading days in the chunk
+    first (HTTP only), accumulate rows in memory keyed by symbol, then flush to
+    S3 once per symbol. This reduces S3 ops from (symbols × days) to (symbols),
+    cutting a 90-day chunk from ~30,000 S3 calls to ~1,000.
 
     Recommended: invoke with step_days=90 (≈ one quarter per call).
-    For the full 2019→2024 backfill, invoke 24 times or run locally.
+    For the full 2019→2024 backfill invoke ~24 times or run the shell loop.
     """
+    from collections import defaultdict  # noqa: PLC0415
+
+    from app.core.time_utils import is_trading_day  # noqa: PLC0415
     from app.data.nifty500_symbols import all_symbols  # noqa: PLC0415
     from app.data.providers.nse_bhavcopy import (  # noqa: PLC0415
         _fetch_with_client,
         _get_session_client,
     )
     from app.data.store import ParquetStore  # noqa: PLC0415
-    from app.core.time_utils import is_trading_day  # noqa: PLC0415
 
     bucket = os.environ["DATA_BUCKET"]
     store = ParquetStore(bucket)
@@ -99,8 +101,6 @@ def _run_backfill(event: dict) -> dict:
 
     start_str = event.get("start") or "2019-01-01"
     end_str = event.get("end") or str(date.today())
-    # step_days controls how many calendar days this single invocation covers.
-    # Default 90 days ≈ one quarter; well within the 900s Lambda timeout.
     step_days = int(event.get("step_days", 90))
 
     start = date.fromisoformat(start_str)
@@ -109,11 +109,12 @@ def _run_backfill(event: dict) -> dict:
 
     log.info("Backfill: %s → %s (this chunk ends %s)", start, end, chunk_end)
 
-    total_rows = 0
+    # Phase 1 — HTTP only: fetch all trading days, accumulate rows per symbol in memory.
+    # Avoids interleaving S3 reads/writes with network calls.
+    rows_by_symbol: dict[str, list[dict]] = defaultdict(list)
     total_days = 0
     last_loaded: date | None = None
 
-    # Reuse one HTTP session + cookies for the whole chunk
     client = _get_session_client()
     try:
         current = start
@@ -124,27 +125,33 @@ def _run_backfill(event: dict) -> dict:
                     df_filtered = df[df["symbol"].isin(symbols)]
                     if not df_filtered.empty:
                         for symbol, group in df_filtered.groupby("symbol"):
-                            store.append_ohlcv(str(symbol), group.to_dict("records"))
-                        total_rows += len(df_filtered)
+                            rows_by_symbol[str(symbol)].extend(group.to_dict("records"))
                         total_days += 1
                         last_loaded = current
                         log.info(
-                            "Backfill: loaded %s (%d rows for %d symbols)",
+                            "Backfill: fetched %s (%d rows, %d symbols)",
                             current, len(df_filtered), df_filtered["symbol"].nunique(),
                         )
+                    else:
+                        log.debug("No universe symbols in bhavcopy for %s", current)
                 else:
                     log.debug("No data for %s (holiday or NSE fetch failed)", current)
             current += timedelta(days=1)
     finally:
         client.close()
 
+    # Phase 2 — S3 only: one read + one write per symbol for the whole chunk.
+    total_rows = 0
+    for symbol, rows in rows_by_symbol.items():
+        store.append_ohlcv(symbol, rows)
+        total_rows += len(rows)
+
     next_start = chunk_end + timedelta(days=1)
     done = next_start > end
 
     log.info(
-        "Backfill chunk done: %d trading days, %d rows. "
-        "next_start=%s done=%s",
-        total_days, total_rows, next_start, done,
+        "Backfill chunk done: %d trading days, %d rows, %d symbols. next_start=%s done=%s",
+        total_days, total_rows, len(rows_by_symbol), next_start, done,
     )
     return {
         "statusCode": 200,
@@ -154,6 +161,7 @@ def _run_backfill(event: dict) -> dict:
             "full_end": end_str,
             "trading_days_loaded": total_days,
             "total_rows": total_rows,
+            "symbols_updated": len(rows_by_symbol),
             "last_loaded_date": str(last_loaded) if last_loaded else None,
             "next_start": next_start.isoformat(),
             "done": done,
