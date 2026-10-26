@@ -58,10 +58,15 @@ def _df_row_to_candle(row: pd.Series, symbol: str, timeframe: Timeframe) -> Cand
 
 
 class HybridDataProvider(MarketDataProvider):
-    """Reads from S3 Parquet; falls back to Groww then NSE Bhavcopy for gaps."""
+    """Reads from S3 Parquet; falls back to Groww then NSE Bhavcopy for gaps.
 
-    def __init__(self, store: ParquetStore | None = None) -> None:
+    Set fill_gaps=False (used by the backtest handler) to skip all external API
+    calls and return only what is already stored in S3.
+    """
+
+    def __init__(self, store: ParquetStore | None = None, fill_gaps: bool = True) -> None:
         self._store = store or _store_from_env()
+        self._fill_gaps_enabled = fill_gaps
 
     def get_instruments(self) -> list[Instrument]:
         from app.data.nifty500_symbols import NIFTY500
@@ -96,9 +101,14 @@ class HybridDataProvider(MarketDataProvider):
         from app.data.providers.nse_bhavcopy import trading_days_missing
         missing = trading_days_missing(bare, start, end, stored_dates)
 
-        if missing:
+        if missing and self._fill_gaps_enabled:
             log.info("Gap-filling %d days for %s from Groww/Bhavcopy", len(missing), bare)
             df = self._fill_gaps(bare, df, missing, start, end)
+        elif missing:
+            log.debug(
+                "Skipping gap-fill for %s (%d missing days, fill_gaps=False)",
+                bare, len(missing),
+            )
 
         if df.empty:
             return []

@@ -155,8 +155,13 @@ def _run_walk_forward_all(
     """Fetch candles once, run walk-forward per strategy, save results to S3."""
     from datetime import timedelta as _td
 
-    provider = HybridDataProvider()
-    fetch_start = train_anchor - _td(days=_WARMUP_BUFFER_DAYS)
+    # fill_gaps=False: read only from S3, no Groww/yfinance calls.
+    # All data was loaded by the backfill pipeline; external API calls across
+    # 500 symbols cause timeouts and log noise.
+    provider = HybridDataProvider(fill_gaps=False)
+    # Warmup buffer requests pre-anchor data; clamp to 2019-01-01 since that is
+    # the earliest date in S3. Requesting earlier triggers 500 gap-fill attempts.
+    fetch_start = max(train_anchor - _td(days=_WARMUP_BUFFER_DAYS), date(2019, 1, 1))
 
     # Fetch candles once for all strategies
     candles_by_symbol: dict[str, Any] = {}
