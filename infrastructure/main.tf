@@ -41,7 +41,7 @@ locals {
 # ── S3 ────────────────────────────────────────────────────────────────────────
 
 resource "aws_s3_bucket" "data" {
-  bucket_prefix = "${local.name}-data-"
+  bucket = "${local.name}-data"
 }
 
 resource "aws_s3_bucket_versioning" "data" {
