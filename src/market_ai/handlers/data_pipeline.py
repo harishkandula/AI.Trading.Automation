@@ -74,6 +74,43 @@ def _run_daily(target_date: date) -> dict:
     }
 
 
+_BACKFILL_PK = "backfill#progress"
+_BACKFILL_SK = "checkpoint"
+
+
+def _load_checkpoint() -> date | None:
+    """Return the last completed chunk_end date from DynamoDB, or None."""
+    import boto3  # noqa: PLC0415
+    table_name = os.environ.get("STATE_TABLE", "")
+    if not table_name:
+        return None
+    try:
+        table = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "ap-south-1")).Table(table_name)
+        item = table.get_item(Key={"pk": _BACKFILL_PK, "sk": _BACKFILL_SK}).get("Item")
+        if item and item.get("last_chunk_end"):
+            return date.fromisoformat(str(item["last_chunk_end"]))
+    except Exception:
+        log.warning("Could not load backfill checkpoint", exc_info=True)
+    return None
+
+
+def _save_checkpoint(chunk_end: date) -> None:
+    """Persist the completed chunk_end so the next invocation can resume."""
+    import boto3  # noqa: PLC0415
+    table_name = os.environ.get("STATE_TABLE", "")
+    if not table_name:
+        return
+    try:
+        table = boto3.resource("dynamodb", region_name=os.environ.get("AWS_REGION", "ap-south-1")).Table(table_name)
+        table.put_item(Item={
+            "pk": _BACKFILL_PK,
+            "sk": _BACKFILL_SK,
+            "last_chunk_end": chunk_end.isoformat(),
+        })
+    except Exception:
+        log.warning("Could not save backfill checkpoint", exc_info=True)
+
+
 def _run_backfill(event: dict) -> dict:
     """Backfill historical bhavcopy data for a date range.
 
@@ -82,8 +119,11 @@ def _run_backfill(event: dict) -> dict:
     S3 once per symbol. This reduces S3 ops from (symbols × days) to (symbols),
     cutting a 90-day chunk from ~30,000 S3 calls to ~1,000.
 
-    Recommended: invoke with step_days=90 (≈ one quarter per call).
-    For the full 2019→2024 backfill invoke ~24 times or run the shell loop.
+    Auto-resume: if 'start' is omitted, the last checkpoint is loaded from
+    DynamoDB so the same event payload can be re-invoked repeatedly until done.
+
+    Recommended: step_days=180 (≈ one half-year per call, ~12 invocations for
+    the full 2019→2024 backfill).
     """
     from collections import defaultdict  # noqa: PLC0415
 
@@ -99,11 +139,22 @@ def _run_backfill(event: dict) -> dict:
     store = ParquetStore(bucket)
     symbols = set(all_symbols())
 
-    start_str = event.get("start") or "2019-01-01"
-    end_str = event.get("end") or str(date.today())
-    step_days = int(event.get("step_days", 90))
+    end_str = event.get("end") or "2024-12-31"
+    step_days = int(event.get("step_days", 180))
 
-    start = date.fromisoformat(start_str)
+    # Resolve start: explicit in event > DynamoDB checkpoint + 1 day > default
+    explicit_start = event.get("start") or ""
+    if explicit_start:
+        start = date.fromisoformat(explicit_start)
+    else:
+        checkpoint = _load_checkpoint()
+        if checkpoint:
+            start = checkpoint + timedelta(days=1)
+            log.info("Resuming backfill from checkpoint: last completed %s, starting %s", checkpoint, start)
+        else:
+            start = date(2019, 1, 1)
+            log.info("No checkpoint found, starting from %s", start)
+
     end = date.fromisoformat(end_str)
     chunk_end = min(start + timedelta(days=step_days - 1), end)
 
@@ -146,6 +197,9 @@ def _run_backfill(event: dict) -> dict:
         store.append_ohlcv(symbol, rows)
         total_rows += len(rows)
 
+    # Save checkpoint so next invocation auto-resumes from here.
+    _save_checkpoint(chunk_end)
+
     next_start = chunk_end + timedelta(days=1)
     done = next_start > end
 
@@ -156,7 +210,7 @@ def _run_backfill(event: dict) -> dict:
     return {
         "statusCode": 200,
         "body": {
-            "chunk_start": start_str,
+            "chunk_start": start.isoformat(),
             "chunk_end": chunk_end.isoformat(),
             "full_end": end_str,
             "trading_days_loaded": total_days,
