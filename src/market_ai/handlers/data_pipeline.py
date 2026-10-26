@@ -75,9 +75,21 @@ def _run_daily(target_date: date) -> dict:
 
 
 def _run_backfill(event: dict) -> dict:
-    """Backfill historical bhavcopy data for a date range."""
+    """Backfill historical bhavcopy data for a date range.
+
+    The Lambda timeout is 900 s. To handle multi-year backfills, invoke this
+    function repeatedly with increasing start dates, or use step_days to control
+    how much each invocation covers. The response includes next_start so the
+    caller can chain invocations.
+
+    Recommended: invoke with step_days=90 (≈ one quarter per call).
+    For the full 2019→2024 backfill, invoke 24 times or run locally.
+    """
     from app.data.nifty500_symbols import all_symbols  # noqa: PLC0415
-    from app.data.providers.nse_bhavcopy import fetch_bhavcopy  # noqa: PLC0415
+    from app.data.providers.nse_bhavcopy import (  # noqa: PLC0415
+        _fetch_with_client,
+        _get_session_client,
+    )
     from app.data.store import ParquetStore  # noqa: PLC0415
     from app.core.time_utils import is_trading_day  # noqa: PLC0415
 
@@ -87,41 +99,64 @@ def _run_backfill(event: dict) -> dict:
 
     start_str = event.get("start", "2019-01-01")
     end_str = event.get("end", str(date.today()))
-    step_days = int(event.get("step_days", 30))
+    # step_days controls how many calendar days this single invocation covers.
+    # Default 90 days ≈ one quarter; well within the 900s Lambda timeout.
+    step_days = int(event.get("step_days", 90))
 
     start = date.fromisoformat(start_str)
     end = date.fromisoformat(end_str)
+    chunk_end = min(start + timedelta(days=step_days - 1), end)
 
-    log.info("Backfill: %s → %s in %d-day chunks", start, end, step_days)
+    log.info("Backfill: %s → %s (this chunk ends %s)", start, end, chunk_end)
 
     total_rows = 0
     total_days = 0
-    chunk_start = start
+    last_loaded: date | None = None
 
-    while chunk_start <= end:
-        chunk_end = min(chunk_start + timedelta(days=step_days - 1), end)
-        current = chunk_start
+    # Reuse one HTTP session + cookies for the whole chunk
+    client = _get_session_client()
+    try:
+        current = start
         while current <= chunk_end:
             if is_trading_day(current):
-                df = fetch_bhavcopy(current)
+                df = _fetch_with_client(client, current)
                 if not df.empty:
                     df_filtered = df[df["symbol"].isin(symbols)]
-                    for symbol, group in df_filtered.groupby("symbol"):
-                        store.append_ohlcv(str(symbol), group.to_dict("records"))
-                    total_rows += len(df_filtered)
-                    total_days += 1
-                    log.info("Backfill: loaded %s (%d rows)", current, len(df_filtered))
+                    if not df_filtered.empty:
+                        for symbol, group in df_filtered.groupby("symbol"):
+                            store.append_ohlcv(str(symbol), group.to_dict("records"))
+                        total_rows += len(df_filtered)
+                        total_days += 1
+                        last_loaded = current
+                        log.info(
+                            "Backfill: loaded %s (%d rows for %d symbols)",
+                            current, len(df_filtered), df_filtered["symbol"].nunique(),
+                        )
+                else:
+                    log.debug("No data for %s (holiday or NSE fetch failed)", current)
             current += timedelta(days=1)
-        chunk_start = chunk_end + timedelta(days=1)
+    finally:
+        client.close()
 
-    log.info("Backfill complete: %d trading days, %d total rows", total_days, total_rows)
+    next_start = chunk_end + timedelta(days=1)
+    done = next_start > end
+
+    log.info(
+        "Backfill chunk done: %d trading days, %d rows. "
+        "next_start=%s done=%s",
+        total_days, total_rows, next_start, done,
+    )
     return {
         "statusCode": 200,
         "body": {
-            "start": start_str,
-            "end": end_str,
+            "chunk_start": start_str,
+            "chunk_end": chunk_end.isoformat(),
+            "full_end": end_str,
             "trading_days_loaded": total_days,
             "total_rows": total_rows,
+            "last_loaded_date": str(last_loaded) if last_loaded else None,
+            "next_start": next_start.isoformat(),
+            "done": done,
         },
     }
 
