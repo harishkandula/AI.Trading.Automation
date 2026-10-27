@@ -74,9 +74,13 @@ def run_universe_backtest(
     "symbols_scanned": int}]
     """
     if provider is None:
-        provider = HybridDataProvider()
+        # fill_gaps=False: backtest reads only from S3 — no Groww/yfinance calls.
+        # All data was loaded by the backfill pipeline.
+        provider = HybridDataProvider(fill_gaps=False)
 
-    fetch_start = start - timedelta(days=_WARMUP_BUFFER_DAYS)
+    # Clamp to 2019-01-01 — earliest date in S3. Going earlier triggers gap-fills
+    # for every symbol since there is no pre-2019 data to find.
+    fetch_start = max(start - timedelta(days=_WARMUP_BUFFER_DAYS), date(2019, 1, 1))
 
     # ------------------------------------------------------------------ #
     # Fetch daily candles once — shared by all daily strategies            #
