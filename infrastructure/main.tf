@@ -591,10 +591,11 @@ resource "aws_ecs_task_definition" "screener" {
   task_role_arn            = aws_iam_role.ecs_task[0].arn
 
   container_definitions = jsonencode([{
-    name  = "screener"
-    image = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+    name       = "screener"
+    image      = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+    entryPoint = ["python", "-m"]
     command = [
-      "python", "-m", "scripts.run_screener",
+      "scripts.run_screener",
       "--strategy", "all",
       "--universe", "mock"
     ]
@@ -648,10 +649,11 @@ resource "aws_ecs_task_definition" "backtest" {
   task_role_arn            = aws_iam_role.ecs_task[0].arn
 
   container_definitions = jsonencode([{
-    name  = "backtest"
-    image = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+    name       = "backtest"
+    image      = "${aws_ecr_repository.app.repository_url}:${var.ecr_image_tag}"
+    entryPoint = ["python", "-m"]
     command = [
-      "python", "-m", "scripts.run_backtest",
+      "scripts.run_backtest",
       "--strategy", "all",
       "--universe", "nifty500",
       "--start", "2019-01-01",
