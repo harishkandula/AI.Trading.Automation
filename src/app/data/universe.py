@@ -126,8 +126,8 @@ _UNIVERSES: dict[str, list[str]] = {
 def get_universe(name: str) -> list[str]:
     """Return the symbol list for a named universe.
 
-    Supported names: ``"nifty50"``, ``"nifty_next50"``, ``"mock"``,
-    or a ``"+"`` joined combination e.g. ``"nifty50+nifty_next50"``.
+    Supported names: ``"nifty50"``, ``"nifty_next50"``, ``"nifty500"``,
+    ``"mock"``, or a ``"+"`` joined combination e.g. ``"nifty50+nifty_next50"``.
 
     Raises
     ------
@@ -135,6 +135,11 @@ def get_universe(name: str) -> list[str]:
         If *name* is not a recognised universe identifier.
     """
     key = name.lower()
+
+    # nifty500 — full 500 symbols from nifty500_symbols.py
+    if key == "nifty500":
+        from app.data.nifty500_symbols import all_symbols  # noqa: PLC0415
+        return all_symbols()
 
     # Combined universe: "nifty50+nifty_next50"
     if "+" in key:
@@ -145,7 +150,7 @@ def get_universe(name: str) -> list[str]:
             if part not in _UNIVERSES:
                 raise ValueError(
                     f"Unknown universe {part!r} in combined spec {name!r}. "
-                    f"Valid choices: {sorted(_UNIVERSES)}"
+                    f"Valid choices: {sorted(_UNIVERSES) + ['nifty500']}"
                 )
             for sym in _UNIVERSES[part]:
                 if sym not in seen:
@@ -156,6 +161,6 @@ def get_universe(name: str) -> list[str]:
     if key not in _UNIVERSES:
         raise ValueError(
             f"Unknown universe {name!r}. "
-            f"Valid choices: {sorted(_UNIVERSES)}"
+            f"Valid choices: {sorted(_UNIVERSES) + ['nifty500']}"
         )
     return list(_UNIVERSES[key])
