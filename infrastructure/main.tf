@@ -624,7 +624,7 @@ resource "aws_ecs_task_definition" "screener" {
 resource "aws_security_group" "ecs_tasks" {
   count       = var.enable_ecs ? 1 : 0
   name        = "${local.name}-ecs-tasks"
-  description = "ECS Fargate tasks — outbound to internet only"
+  description = "ECS Fargate tasks - outbound to internet only"
   vpc_id      = var.vpc_id
 
   egress {
