@@ -20,14 +20,15 @@ def check(label: str, ok: bool, detail: str = "") -> bool:
 
 def main() -> None:
     import platform
-    print(f"\nMarket AI Environment Validation")
+    print("\nMarket AI Environment Validation")
     print(f"Python {sys.version}")
     print(f"Platform: {platform.system()}\n")
 
     results = []
 
     # Python version
-    results.append(check("Python >= 3.10", sys.version_info >= (3, 10), f"{sys.version_info.major}.{sys.version_info.minor}"))
+    ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    results.append(check("Python >= 3.10", sys.version_info >= (3, 10), ver))
 
     # Core imports
     for pkg in ["pydantic", "pydantic_settings", "httpx", "tenacity"]:

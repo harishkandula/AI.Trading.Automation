@@ -4,10 +4,11 @@ WORKDIR /var/task
 
 COPY pyproject.toml ./
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 
 RUN pip install --no-cache-dir "."
 
-ENV PYTHONPATH=/var/task/src
+ENV PYTHONPATH=/var/task/src:/var/task
 ENV TRADING_MODE=RESEARCH_ONLY
 ENV ENABLE_LIVE_ORDERS=false
 
