@@ -64,20 +64,20 @@ variable "enable_rds" {
 
 variable "enable_ecs" {
   type        = bool
-  default     = false
+  default     = true
   description = "Set true to provision ECS cluster and task definitions"
 }
 
 variable "vpc_id" {
   type        = string
-  default     = ""
-  description = "Existing VPC ID for RDS/ECS (required if enable_rds or enable_ecs = true)"
+  default     = "vpc-3110f058"
+  description = "Existing VPC ID for ECS tasks"
 }
 
 variable "private_subnet_ids" {
   type        = list(string)
-  default     = []
-  description = "Private subnet IDs for RDS/ECS tasks"
+  default     = ["subnet-1d896974", "subnet-31995e4a", "subnet-0dcfed47"]
+  description = "Subnet IDs for ECS Fargate tasks (public subnets, default VPC)"
 }
 
 variable "log_retention_days" {

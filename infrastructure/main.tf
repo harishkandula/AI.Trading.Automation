@@ -342,18 +342,8 @@ resource "aws_lambda_permission" "events" {
   source_arn    = each.value.arn
 }
 
-resource "aws_cloudwatch_event_target" "backtest" {
-  rule = aws_cloudwatch_event_rule.backtest.name
-  arn  = aws_lambda_function.backtest.arn
-}
-
-resource "aws_lambda_permission" "backtest" {
-  statement_id  = "AllowEventBridge-backtest"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.backtest.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.backtest.arn
-}
+# Backtest schedule now triggers ECS Fargate (see aws_cloudwatch_event_target.backtest_ecs).
+# Lambda backtest function is kept for manual ad-hoc invocations only.
 
 # ── Pre-warm rules (2 min before morning and evening) ────────────────────────
 # Fires a {_prewarm: true} ping so the container is already warm when the real
@@ -630,14 +620,30 @@ resource "aws_ecs_task_definition" "screener" {
   }])
 }
 
-# Backtest ECS task definition
+# Security group for ECS Fargate tasks (outbound only — no inbound needed)
+resource "aws_security_group" "ecs_tasks" {
+  count       = var.enable_ecs ? 1 : 0
+  name        = "${local.name}-ecs-tasks"
+  description = "ECS Fargate tasks — outbound to internet only"
+  vpc_id      = var.vpc_id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound (S3, ECR, NSE, DynamoDB)"
+  }
+}
+
+# Backtest ECS task definition — 4 vCPU / 8 GB, no timeout limit
 resource "aws_ecs_task_definition" "backtest" {
   count                    = var.enable_ecs ? 1 : 0
   family                   = "${local.name}-backtest"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 2048
+  cpu                      = 4096
+  memory                   = 8192
   execution_role_arn       = aws_iam_role.ecs_task_execution[0].arn
   task_role_arn            = aws_iam_role.ecs_task[0].arn
 
@@ -647,14 +653,20 @@ resource "aws_ecs_task_definition" "backtest" {
     command = [
       "python", "-m", "scripts.run_backtest",
       "--strategy", "all",
-      "--universe", "mock",
+      "--universe", "nifty500",
+      "--start", "2019-01-01",
+      "--end", "2024-12-31",
       "--output", "/tmp/backtest_results.json"
     ]
     environment = [
       { name = "APP_ENV", value = var.environment },
       { name = "TRADING_MODE", value = "RESEARCH_ONLY" },
       { name = "ENABLE_LIVE_ORDERS", value = "false" },
-      { name = "DATA_BUCKET", value = aws_s3_bucket.data.id }
+      { name = "DATA_BUCKET", value = aws_s3_bucket.data.id },
+      { name = "STATE_TABLE", value = aws_dynamodb_table.state.name },
+      { name = "LEADERBOARD_TABLE", value = aws_dynamodb_table.leaderboard.name },
+      { name = "TELEGRAM_BOT_TOKEN", value = var.telegram_bot_token },
+      { name = "TELEGRAM_CHAT_ID", value = var.telegram_chat_id }
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -665,6 +677,62 @@ resource "aws_ecs_task_definition" "backtest" {
       }
     }
   }])
+}
+
+# IAM role for EventBridge to launch ECS tasks
+resource "aws_iam_role" "eventbridge_ecs" {
+  count = var.enable_ecs ? 1 : 0
+  name  = "${local.name}-eventbridge-ecs"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "eventbridge_ecs" {
+  count = var.enable_ecs ? 1 : 0
+  role  = aws_iam_role.eventbridge_ecs[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "ecs:RunTask"
+      Resource = aws_ecs_task_definition.backtest[0].arn
+      }, {
+      Effect = "Allow"
+      Action = "iam:PassRole"
+      Resource = [
+        aws_iam_role.ecs_task_execution[0].arn,
+        aws_iam_role.ecs_task[0].arn,
+      ]
+    }]
+  })
+}
+
+# EventBridge target: Sunday 11:00 IST → ECS Fargate backtest task
+resource "aws_cloudwatch_event_target" "backtest_ecs" {
+  count    = var.enable_ecs ? 1 : 0
+  rule     = aws_cloudwatch_event_rule.backtest.name
+  arn      = aws_ecs_cluster.main[0].arn
+  role_arn = aws_iam_role.eventbridge_ecs[0].arn
+
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.backtest[0].arn
+    task_count          = 1
+    launch_type         = "FARGATE"
+
+    network_configuration {
+      subnets          = var.private_subnet_ids
+      security_groups  = [aws_security_group.ecs_tasks[0].id]
+      assign_public_ip = true
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "ecs_screener" {
