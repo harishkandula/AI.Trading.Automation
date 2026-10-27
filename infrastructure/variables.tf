@@ -102,6 +102,6 @@ variable "telegram_chat_id" {
 
 variable "universe" {
   type        = string
-  default     = "nifty50"
-  description = "Symbol universe: nifty50, nifty_next50, or nifty50+nifty_next50"
+  default     = "nifty500"
+  description = "Symbol universe for daily scans: nifty50, nifty500"
 }
