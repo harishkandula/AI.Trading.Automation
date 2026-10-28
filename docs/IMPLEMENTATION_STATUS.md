@@ -1,140 +1,44 @@
 # Implementation Status
 
-Last updated: 2026-10-09
+Last updated: 2026-10-28
 
-## Legend
-- NOT_STARTED
-- IN_PROGRESS
-- COMPLETE
-- BLOCKED
+## Deployed and Working
 
-## Milestone 1 – Foundation
-| Item | Status |
-|------|--------|
-| Branch feature/strategy-automation-v2 | COMPLETE |
-| Secret scan | COMPLETE |
-| docs/CURRENT_ARCHITECTURE.md | COMPLETE |
-| docs/TARGET_ARCHITECTURE.md | COMPLETE |
-| docs/IMPLEMENTATION_PLAN.md | COMPLETE |
-| docs/ASSUMPTIONS.md | COMPLETE |
-| .env.example | COMPLETE |
-| .gitignore update | COMPLETE |
-| pyproject.toml update | COMPLETE |
-| IMPLEMENTATION_STATUS.md | COMPLETE |
+| Component | Status | Notes |
+|---|---|---|
+| CI/CD pipeline (GitHub Actions) | COMPLETE | validate → docker-build → deploy |
+| Terraform IaC | COMPLETE | Lambda, ECS, S3, DynamoDB, ECR, EventBridge, Secrets Manager |
+| Container image deployment | COMPLETE | All Lambdas + ECS share one ECR image |
+| NSE bhavcopy data pipeline | COMPLETE | Daily 04:00 IST, BhavcopBlockedError handled |
+| Corporate action detection | COMPLETE | Ratio threshold 0.75/1.35, yfinance re-adjust, adjusted_flag on S3 |
+| HybridDataProvider (fill_gaps=False) | COMPLETE | Scan handlers read S3 only — zero API calls at scan time |
+| 8-strategy signal engine | COMPLETE | s00_benchmark, s01_rs_momentum, s02_vcp, s03_trend_pullback, gap_up_volume, morning_star, rsi_supertrend_volume, intraday_support_supertrend |
+| NIFTY 500 universe (513 symbols) | COMPLETE | 82 absent symbols removed; SYMBOL_RENAMES tracked |
+| Morning scan Lambda | COMPLETE | 07:00 IST, scores signals, risk guard, Telegram |
+| Evening scan Lambda | COMPLETE | 19:00 IST, Groww holdings read |
+| Weekly compounder Lambda | COMPLETE | Sunday 10:00 IST |
+| Token refresh Lambda | COMPLETE | Daily 06:00 IST |
+| Pre-warm pings | COMPLETE | 06:58 and 18:58 IST to eliminate cold start |
+| Signal scoring (0-100) | COMPLETE | regime/RS/sector/setup/confluence dimensions |
+| Portfolio risk guard | COMPLETE | Sector + segment caps, position limits |
+| ECS Fargate backtest | COMPLETE | Sunday 11:00 IST, 4 vCPU / 8 GB, no timeout |
+| Leaderboard Lambda | COMPLETE | Sunday 12:30 IST, profitable-first ranking |
+| DynamoDB leaderboard table | COMPLETE | ECS task role IAM fixed |
+| NSE holiday calendar | COMPLETE | 2024–2027 covered |
+| Telegram notifications | COMPLETE | Signals, daily summary, error alerts, freshness warnings |
+| Data freshness check | COMPLETE | morning.py + evening.py check S3 age vs prev_trading_day |
+| Survivorship bias warning | COMPLETE | Logged once per backtest run |
+| Warmup bar guard | COMPLETE | Skips symbol+strategy if candles < warmup_bars + 5 |
+| Intraday strategy guard | COMPLETE | M5 strategies skipped in daily scan handlers |
 
-## Milestone 2 – Core Layer
-| Item | Status |
-|------|--------|
-| app/core/config.py | COMPLETE |
-| app/core/logging.py | COMPLETE |
-| app/core/exceptions.py | COMPLETE |
-| app/core/time_utils.py | COMPLETE |
-| app/core/identifiers.py | COMPLETE |
-| app/models/* | COMPLETE |
+## Known Gaps (Intentional — Not Bugs)
 
-## Milestone 3 – Data Layer
-| Item | Status |
-|------|--------|
-| app/data/providers/base.py | COMPLETE |
-| app/data/providers/mock.py | COMPLETE |
-| app/data/providers/groww.py | COMPLETE |
-| app/data/quality/validators.py | COMPLETE |
-| app/data/repositories/candles.py | COMPLETE |
-| app/data/repositories/instruments.py | COMPLETE |
-
-## Milestone 4 – Indicators
-| Item | Status |
-|------|--------|
-| app/indicators/rsi.py | COMPLETE |
-| app/indicators/atr.py | COMPLETE |
-| app/indicators/supertrend.py | COMPLETE |
-| app/indicators/vwap.py | COMPLETE |
-| app/indicators/volume.py | COMPLETE |
-| app/indicators/support_resistance.py | COMPLETE |
-| app/indicators/candlestick_patterns.py | COMPLETE |
-
-## Milestone 5 – Strategy Framework + 4 Strategies
-| Item | Status |
-|------|--------|
-| app/strategies/base.py | COMPLETE |
-| app/strategies/registry.py | COMPLETE |
-| app/strategies/models.py | COMPLETE |
-| app/strategies/intraday_support_supertrend.py | COMPLETE |
-| app/strategies/morning_star.py | COMPLETE |
-| app/strategies/rsi_supertrend_volume.py | COMPLETE |
-| app/strategies/gap_up_volume.py | COMPLETE |
-| strategies/*.yaml | COMPLETE |
-
-## Milestone 6 – Backtesting Engine
-| Item | Status |
-|------|--------|
-| app/backtesting/engine.py | COMPLETE |
-| app/backtesting/executions.py | COMPLETE |
-| app/backtesting/portfolio.py | COMPLETE |
-| app/backtesting/positions.py | COMPLETE |
-| app/backtesting/costs.py | COMPLETE |
-| app/backtesting/metrics.py | COMPLETE |
-| app/backtesting/walk_forward.py | COMPLETE |
-| app/backtesting/reports.py | COMPLETE |
-
-## Milestone 7 – Paper Trading
-| Item | Status |
-|------|--------|
-| app/paper_trading/engine.py | COMPLETE |
-| app/paper_trading/lifecycle.py | COMPLETE |
-| app/paper_trading/reconciliation.py | COMPLETE |
-| app/paper_trading/performance.py | COMPLETE |
-
-## Milestone 8 – Screener + Leaderboard
-| Item | Status |
-|------|--------|
-| app/screener/universe.py | COMPLETE |
-| app/screener/filters.py | COMPLETE |
-| app/screener/scanner.py | COMPLETE |
-| app/screener/ranking.py | COMPLETE |
-
-## Milestone 9 – Notifications
-| Item | Status |
-|------|--------|
-| app/notifications/telegram.py | COMPLETE |
-| app/notifications/email.py | COMPLETE |
-| app/notifications/templates.py | COMPLETE |
-
-## Milestone 10 – Jobs + CLI
-| Item | Status |
-|------|--------|
-| app/jobs/*.py | COMPLETE |
-| scripts/validate_environment.py | COMPLETE |
-| scripts/bootstrap_data.py | COMPLETE |
-| scripts/run_backtest.py | COMPLETE |
-| scripts/run_screener.py | COMPLETE |
-
-## Milestone 11 – Tests
-| Item | Status |
-|------|--------|
-| tests/unit/indicators/* | COMPLETE |
-| tests/unit/strategies/* | COMPLETE |
-| tests/unit/backtesting/* | COMPLETE |
-| tests/unit/data/* | COMPLETE |
-| tests/unit/notifications/* | COMPLETE |
-| tests/integration/* | COMPLETE |
-
-## Milestone 12 – Docker + CI + Terraform
-| Item | Status |
-|------|--------|
-| Dockerfile | COMPLETE |
-| docker-compose.yml | COMPLETE |
-| .github/workflows/main.yml update | COMPLETE |
-| infrastructure/main.tf update | COMPLETE |
-
-## Milestone 13 – Documentation
-| Item | Status |
-|------|--------|
-| README.md rewrite | COMPLETE |
-| docs/STRATEGY_DEFINITIONS.md | COMPLETE |
-| docs/BACKTESTING_ASSUMPTIONS.md | COMPLETE |
-| docs/DATA_LIMITATIONS.md | COMPLETE |
-| docs/SECURITY.md | COMPLETE |
-| docs/AWS_DEPLOYMENT.md | COMPLETE |
-| docs/OPERATIONS_RUNBOOK.md | COMPLETE |
-| docs/ADDING_A_STRATEGY.md | COMPLETE |
+| Gap | Notes |
+|---|---|
+| Market regime computation | `MarketRegime.UNKNOWN` = neutral score. Needs NIFTY trend state from S3. |
+| RS percentile | `rs_percentile=None` = neutral. Needs cross-symbol RS scan at morning time. |
+| Sector rank | `sector_rank=None` = neutral. Needs cross-sector comparison. |
+| Weekly fundamentals API | Price-based EMA200 proxy in use. Tijori Finance / Tickertape integration pending. |
+| NIFTY 500 semi-annual rebalance | Static Oct 2026 snapshot. Manual refresh needed each March / September. |
+| Point-in-time universe | Survivorship bias in backtest. Historical constituent data needed. |
+| Live order execution | `ENABLE_LIVE_ORDERS` is `"false"` and hardcoded. RESEARCH_ONLY mode by design. |
