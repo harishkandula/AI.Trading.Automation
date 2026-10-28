@@ -156,6 +156,81 @@ def main() -> None:
         json.dump(results, fh, indent=2, default=str)
     logger.info("Results written to %s", args.output)
 
+    # ------------------------------------------------------------------ #
+    # Persist to S3 + DynamoDB leaderboard when running in AWS (ECS/Lambda)
+    # ------------------------------------------------------------------ #
+    bucket = os.environ.get("DATA_BUCKET", "")
+    run_date = date.today().isoformat()
+    if bucket:
+        _persist_results(results, bucket, run_date, str(end))
+    else:
+        logger.info("DATA_BUCKET not set — skipping S3/leaderboard persist (local run)")
+
+
+def _persist_results(
+    results: dict,
+    bucket: str,
+    run_date: str,
+    end_date: str,
+) -> None:
+    import boto3  # noqa: PLC0415
+    from app.backtesting.leaderboard import write_result as _leaderboard_write  # noqa: PLC0415
+
+    s3 = boto3.client("s3")
+
+    for strategy_id, result in results.items():
+        m = result.get("metrics", {})
+        if "error" in m:
+            continue
+
+        # Save full result JSON to S3
+        key = f"backtests/simple/{run_date}/{strategy_id}.json"
+        try:
+            s3.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=json.dumps(result, indent=2, default=str),
+                ContentType="application/json",
+            )
+            logger.info("S3: s3://%s/%s", bucket, key)
+        except Exception:
+            logger.warning("Failed to save %s to S3", strategy_id, exc_info=True)
+            key = ""
+
+        # Write summary to DynamoDB leaderboard
+        try:
+            aggregated = {
+                "avg_sharpe": m.get("sharpe_ratio"),
+                "avg_net_return_pct": m.get("net_return_pct"),
+                "avg_max_drawdown_pct": m.get("max_drawdown_pct"),
+                "avg_win_rate_pct": m.get("win_rate_pct"),
+                "avg_profit_factor": m.get("profit_factor"),
+                "total_oos_trades": m.get("executed_trades", 0),
+                "consistency_score": None,
+                "validated": False,
+                "windows_count": 1,
+            }
+            provenance = {
+                "run_date": run_date,
+                "end_date": end_date,
+                "runner": "scripts.run_backtest",
+            }
+            _leaderboard_write(
+                strategy_id=strategy_id,
+                run_date=run_date,
+                strategy_version="simple",
+                aggregated=aggregated,
+                provenance=provenance,
+                windows_count=1,
+                s3_key=key,
+            )
+            logger.info("Leaderboard: wrote %s", strategy_id)
+        except Exception:
+            logger.warning(
+                "Leaderboard write failed for %s (LEADERBOARD_TABLE set?)",
+                strategy_id, exc_info=True,
+            )
+
 
 if __name__ == "__main__":
     main()
