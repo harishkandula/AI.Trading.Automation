@@ -59,18 +59,34 @@ def _run_daily(target_date: date) -> dict:
     # Filter to our universe only
     df = df[df["symbol"].isin(symbols)]
     updated = 0
+    adjusted = 0
     for symbol, group in df.groupby("symbol"):
         rows = group.to_dict("records")
         store.append_ohlcv(str(symbol), rows)
         updated += 1
+        if _detect_split(store, str(symbol), target_date):
+            log.warning(
+                "Corporate action detected for %s on %s — re-fetching adjusted history",
+                symbol, target_date,
+            )
+            if _readjust_from_yfinance(store, str(symbol)):
+                adjusted += 1
 
     # Pre-compute indicators after data is fresh
     _compute_indicators(store, list(symbols), target_date)
 
-    log.info("Daily pipeline complete: %d symbols updated for %s", updated, target_date)
+    log.info(
+        "Daily pipeline complete: %d symbols updated, %d adjusted for %s",
+        updated, adjusted, target_date,
+    )
     return {
         "statusCode": 200,
-        "body": {"date": str(target_date), "rows": len(df), "symbols": updated},
+        "body": {
+            "date": str(target_date),
+            "rows": len(df),
+            "symbols": updated,
+            "adjusted": adjusted,
+        },
     }
 
 
@@ -226,6 +242,112 @@ def _run_backfill(event: dict) -> dict:
             "done": done,
         },
     }
+
+
+def _detect_split(store: object, symbol: str, today: date) -> bool:
+    """Return True if today's close vs yesterday's close implies a corporate action.
+
+    A ratio outside [0.4, 2.5] on a single day is almost never a real price move —
+    it indicates a stock split, reverse split, or bonus issue.
+    """
+    from app.data.store import ParquetStore  # noqa: PLC0415
+
+    if not isinstance(store, ParquetStore):
+        return False
+    try:
+        from datetime import timedelta  # noqa: PLC0415
+        df = store.read_ohlcv_range(symbol, today - timedelta(days=5), today)
+        if len(df) < 2:
+            return False
+        df = df.sort_values("date")
+        prev_close = float(df.iloc[-2]["close"])
+        today_close = float(df.iloc[-1]["close"])
+        if prev_close <= 0:
+            return False
+        ratio = today_close / prev_close
+        if ratio < 0.4 or ratio > 2.5:
+            log.warning(
+                "Split signal for %s: prev_close=%.2f today_close=%.2f ratio=%.3f",
+                symbol, prev_close, today_close, ratio,
+            )
+            return True
+    except Exception:
+        log.debug("Split detection failed for %s", symbol, exc_info=True)
+    return False
+
+
+def _readjust_from_yfinance(store: object, symbol: str) -> bool:
+    """Overwrite S3 Parquet for symbol with yfinance split-adjusted history.
+
+    yfinance returns auto-adjusted prices by default, so the full historical
+    series is restated to reflect the split. We re-fetch from 2019-01-01 and
+    overwrite the existing file entirely.
+    """
+    from datetime import date as _date  # noqa: PLC0415
+    from app.data.store import ParquetStore  # noqa: PLC0415
+
+    if not isinstance(store, ParquetStore):
+        return False
+    try:
+        import yfinance as yf  # noqa: PLC0415
+        import pandas as pd  # noqa: PLC0415
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        IST = ZoneInfo("Asia/Kolkata")
+        ticker = yf.Ticker(f"{symbol}.NS")
+        df = ticker.history(
+            start="2019-01-01",
+            end=_date.today().isoformat(),
+            interval="1d",
+            auto_adjust=True,
+        )
+        if df is None or df.empty:
+            log.warning("yfinance returned no data for %s — skipping re-adjust", symbol)
+            return False
+
+        if hasattr(df.columns, "levels"):
+            df.columns = df.columns.get_level_values(0)
+
+        rows = []
+        for ts_raw, row in df.iterrows():
+            try:
+                if hasattr(ts_raw, "tzinfo") and ts_raw.tzinfo is not None:
+                    d = ts_raw.astimezone(IST).date()
+                else:
+                    d = ts_raw.date()
+                o, h, l, c, v = (
+                    float(row["Open"]), float(row["High"]),
+                    float(row["Low"]), float(row["Close"]), float(row["Volume"]),
+                )
+                if c > 0:
+                    rows.append({
+                        "date": d, "open": o, "high": h, "low": l,
+                        "close": c, "volume": v,
+                        "source": "yfinance_adjusted", "adjusted": True,
+                    })
+            except Exception:
+                continue
+
+        if not rows:
+            log.warning("No valid rows from yfinance for %s", symbol)
+            return False
+
+        # Overwrite S3 entirely with adjusted series
+        new_df = pd.DataFrame(rows)
+        new_df["date"] = pd.to_datetime(new_df["date"]).dt.date
+        new_df = new_df.drop_duplicates(subset=["date"], keep="last")
+        new_df = new_df.sort_values("date").reset_index(drop=True)
+        store._write_parquet(f"ohlcv/daily/{symbol}.parquet", new_df)  # noqa: SLF001
+        log.info(
+            "Re-adjusted %s with %d rows from yfinance (split-adjusted)",
+            symbol, len(new_df),
+        )
+        return True
+    except ImportError:
+        log.warning("yfinance not installed — cannot re-adjust %s", symbol)
+    except Exception:
+        log.warning("Re-adjust failed for %s", symbol, exc_info=True)
+    return False
 
 
 def _compute_indicators(store: object, symbols: list[str], as_of: date) -> None:
