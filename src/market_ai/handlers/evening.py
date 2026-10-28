@@ -38,8 +38,9 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     start = today - timedelta(days=_WARMUP_DAYS)
 
     import os  # noqa: PLC0415
-    provider = HybridDataProvider()
-    universe_name = os.environ.get("UNIVERSE", "nifty50")
+    # fill_gaps=False: reads S3 only — data pipeline already ran before market close.
+    provider = HybridDataProvider(fill_gaps=False)
+    universe_name = os.environ.get("UNIVERSE", "nifty500")
     symbols = get_universe(universe_name)
     strategies = all_strategies()
 
