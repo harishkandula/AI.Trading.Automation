@@ -72,7 +72,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         log.warning(freshness_warning)
         try:
             notifier = Notifier.from_secrets()
-            notifier.send_error_alert(freshness_warning)
+            notifier.send_error_alert("data_freshness", freshness_warning)
         except Exception:
             log.debug("Could not send freshness warning via notifier", exc_info=True)
 
