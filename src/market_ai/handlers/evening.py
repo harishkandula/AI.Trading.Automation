@@ -58,6 +58,12 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             scanned += 1
             for _sid, strategy_cls in strategies.items():
                 strategy = strategy_cls()
+                if len(candles) < strategy.warmup_bars + 5:
+                    log.debug(
+                        "Skipping %s on %s — too few bars (%d < %d)",
+                        _sid, symbol, len(candles), strategy.warmup_bars + 5,
+                    )
+                    continue
                 try:
                     signals = strategy.generate_signals(symbol, candles)
                     for sig in signals:
