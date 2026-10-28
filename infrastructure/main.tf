@@ -561,9 +561,15 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = ["${aws_s3_bucket.data.arn}", "${aws_s3_bucket.data.arn}/*"]
       },
       {
-        Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:UpdateItem"]
-        Resource = aws_dynamodb_table.state.arn
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem", "dynamodb:PutItem",
+          "dynamodb:Query", "dynamodb:UpdateItem", "dynamodb:Scan"
+        ]
+        Resource = [
+          aws_dynamodb_table.state.arn,
+          aws_dynamodb_table.leaderboard.arn,
+        ]
       },
       {
         Effect   = "Allow"
