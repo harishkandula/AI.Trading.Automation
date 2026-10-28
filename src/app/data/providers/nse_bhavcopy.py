@@ -30,6 +30,11 @@ from app.core.time_utils import is_trading_day
 
 log = logging.getLogger(__name__)
 
+
+class BhavcopBlockedError(Exception):
+    pass
+
+
 _TIMEOUT = 30
 _MONTHS = {
     1: "JAN", 2: "FEB", 3: "MAR", 4: "APR", 5: "MAY", 6: "JUN",
@@ -97,7 +102,10 @@ def _url_cdn(d: date) -> str:
 def _parse_archive_zip(content: bytes, d: date) -> pd.DataFrame:
     """Parse the old zip+CSV format."""
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
-        csv_name = zf.namelist()[0]
+        csv_files = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+        if not csv_files:
+            raise ValueError(f"No CSV file found in bhavcopy zip: {zf.namelist()}")
+        csv_name = csv_files[0]
         with zf.open(csv_name) as f:
             df = pd.read_csv(f)
     df.columns = [c.strip().upper() for c in df.columns]
@@ -158,6 +166,7 @@ def _normalise(df: pd.DataFrame, d: date) -> pd.DataFrame:
         result[col] = pd.to_numeric(result[col], errors="coerce")
     result = result.dropna(subset=["open", "high", "low", "close"])
     result = result[result["close"] > 0]
+    result = result[result["volume"] > 0]
     return result.reset_index(drop=True)
 
 
@@ -175,16 +184,23 @@ def fetch_bhavcopy(d: date) -> pd.DataFrame:
 
 
 def _fetch_with_client(client: httpx.Client, d: date) -> pd.DataFrame:
+    cdn_status = 0
+    archive_status = 0
+
     # Try CDN (recent format) first
     cdn_url = _url_cdn(d)
     try:
         resp = client.get(cdn_url)
-        if resp.status_code == 200 and len(resp.content) > 500:
+        cdn_status = resp.status_code
+        if resp.status_code == 200 and len(resp.content) > 5000:
             df = _parse_cdn_csv(resp.content, d)
-            if not df.empty:
+            if not df.empty and len(df) >= 100:
                 log.debug("Bhavcopy CDN OK for %s (%d rows)", d, len(df))
                 return df
-            log.debug("CDN response parsed empty for %s, trying archive", d)
+            if not df.empty and len(df) < 100:
+                log.debug("CDN response suspiciously small (%d rows) for %s, trying archive", len(df), d)
+            else:
+                log.debug("CDN response parsed empty for %s, trying archive", d)
         elif resp.status_code != 404:
             log.debug("CDN %s → HTTP %d, trying archive", d, resp.status_code)
     except Exception:
@@ -194,17 +210,25 @@ def _fetch_with_client(client: httpx.Client, d: date) -> pd.DataFrame:
     archive_url = _url_archive(d)
     try:
         resp = client.get(archive_url)
+        archive_status = resp.status_code
         if resp.status_code == 404:
             log.debug("Bhavcopy not found for %s (holiday?): %s", d, archive_url)
+            if cdn_status in (403, 429) or archive_status in (403, 429):
+                raise BhavcopBlockedError(f"NSE blocked requests for {d}")
             return pd.DataFrame()
         resp.raise_for_status()
         df = _parse_archive_zip(resp.content, d)
         if not df.empty:
             log.debug("Bhavcopy archive OK for %s (%d rows)", d, len(df))
         return df
+    except BhavcopBlockedError:
+        raise
     except Exception:
         log.warning("Failed to fetch bhavcopy for %s from both CDN and archive", d, exc_info=True)
-        return pd.DataFrame()
+
+    if cdn_status in (403, 429) or archive_status in (403, 429):
+        raise BhavcopBlockedError(f"NSE blocked requests for {d}")
+    return pd.DataFrame()
 
 
 def fetch_bhavcopy_range(start: date, end: date) -> pd.DataFrame:

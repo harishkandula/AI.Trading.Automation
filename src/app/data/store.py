@@ -70,9 +70,20 @@ class ParquetStore:
         existing = self.read_ohlcv(symbol, timeframe)
         new_df = pd.DataFrame(rows)
         new_df[_DATE_COL] = pd.to_datetime(new_df[_DATE_COL]).dt.date
+        _zero_vol = (new_df["volume"] == 0).sum() if "volume" in new_df.columns else 0
+        if _zero_vol > 0:
+            log.debug("Dropping %d zero-volume rows for %s", _zero_vol, symbol)
+            new_df = new_df[new_df["volume"] != 0]
         existing = existing.dropna(axis=1, how="all")
         new_df = new_df.dropna(axis=1, how="all")
         combined = pd.concat([existing, new_df], ignore_index=True)
+        _dup_count = combined.duplicated(subset=[_DATE_COL]).sum()
+        if _dup_count > 0:
+            log.debug("Dedup: %d duplicate dates for %s — keeping last writer", _dup_count, symbol)
+        if "adjusted" in combined.columns:
+            combined["adjusted"] = combined["adjusted"].fillna(False)
+        if "source" in combined.columns:
+            combined["source"] = combined["source"].fillna("unknown")
         combined = combined.drop_duplicates(subset=[_DATE_COL], keep="last")
         combined = combined.sort_values(_DATE_COL).reset_index(drop=True)
         self._write_parquet(_s3_key(symbol, timeframe), combined)
@@ -98,6 +109,17 @@ class ParquetStore:
         if df.empty:
             return None
         return df[_DATE_COL].max()
+
+    def list_symbols(self, timeframe: str = "daily") -> list[str]:
+        prefix = f"ohlcv/{timeframe}/"
+        paginator = self._s3.get_paginator("list_objects_v2")
+        symbols: list[str] = []
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if key.endswith(".parquet"):
+                    symbols.append(key[len(prefix):].removesuffix(".parquet"))
+        return sorted(symbols)
 
     # ------------------------------------------------------------------
     # Indicators

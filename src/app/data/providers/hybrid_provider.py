@@ -97,7 +97,10 @@ class HybridDataProvider(MarketDataProvider):
         df = self._store.read_ohlcv_range(bare, start, end)
 
         # Check if we have all the data we need
-        stored_dates: set[date] = set(df["date"].tolist()) if not df.empty else set()
+        stored_dates: set[date] = (
+            {d if isinstance(d, date) else d.date() for d in df["date"].tolist()}
+            if not df.empty else set()
+        )
         from app.data.providers.nse_bhavcopy import trading_days_missing
         missing = trading_days_missing(bare, start, end, stored_dates)
 
@@ -109,6 +112,15 @@ class HybridDataProvider(MarketDataProvider):
                 "Skipping gap-fill for %s (%d missing days, fill_gaps=False)",
                 bare, len(missing),
             )
+            if df.empty or not stored_dates:
+                log.warning("No S3 data at all for %s (fill_gaps=False) — symbol may not be backfilled", bare)
+            else:
+                latest_stored = max(stored_dates)
+                if (end - latest_stored).days > 3:
+                    log.warning(
+                        "Stale data for %s: latest stored %s, requested end %s (%d missing days)",
+                        bare, latest_stored, end, len(missing),
+                    )
 
         if df.empty:
             return []

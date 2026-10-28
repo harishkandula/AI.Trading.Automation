@@ -35,7 +35,7 @@ from app.strategies.registry import get as _get_strategy
 log = logging.getLogger(__name__)
 
 # Extra days prepended to fetch_start so indicators have enough history to warm up
-_WARMUP_BUFFER_DAYS = 120
+_WARMUP_BUFFER_DAYS = 300
 
 
 def run_universe_backtest(
@@ -100,6 +100,11 @@ def run_universe_backtest(
     log.info(
         "Fetched candles for %d / %d symbols", len(candles_by_symbol), len(symbols)
     )
+    log.warning(
+        "Survivorship bias: universe is current NIFTY 500 (Oct 2026). "
+        "Companies removed during the backtest window are absent — performance is overstated. "
+        "Use a point-in-time universe for production-grade results."
+    )
 
     results: dict[str, Any] = {}
 
@@ -149,7 +154,9 @@ def run_universe_backtest(
             cost_profile=cost_profile,
         )
 
-        all_trades: list[Trade] = state.closed_trades + state.open_trades
+        all_trades: list[Trade] = state.closed_trades
+        if state.open_trades:
+            log.info("  %s: %d open trades at period end excluded from metrics", strategy_id, len(state.open_trades))
         metrics = compute_metrics(
             all_trades,
             state.equity_curve,

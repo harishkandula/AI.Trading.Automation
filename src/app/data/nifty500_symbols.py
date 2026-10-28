@@ -270,7 +270,6 @@ _SMALL_CAP: list[SymbolMeta] = [
     SymbolMeta("AETHER", "SMALL", "Chemicals"),
     SymbolMeta("AGROPHOS", "SMALL", "Agro"),
     SymbolMeta("AJANTPHARM", "SMALL", "Pharma"),
-    SymbolMeta("ALKEM", "SMALL", "Pharma"),
     SymbolMeta("ALLCARGO", "SMALL", "Logistics"),
     SymbolMeta("AMBER", "SMALL", "ConsumerElectronics"),
     SymbolMeta("ANANTRAJ", "SMALL", "RealEstate"),
@@ -299,7 +298,6 @@ _SMALL_CAP: list[SymbolMeta] = [
     SymbolMeta("BIKAJI", "SMALL", "FMCG"),
     SymbolMeta("BOROLTD", "SMALL", "Chemicals"),
     SymbolMeta("BORORENEW", "SMALL", "Power"),
-    SymbolMeta("BPCL", "SMALL", "Energy"),
     SymbolMeta("BSHSL", "SMALL", "ConsumerDiscretionary"),
     SymbolMeta("BSL", "SMALL", "Textiles"),
     SymbolMeta("CAPLIPOINT", "SMALL", "Pharma"),
@@ -524,7 +522,6 @@ _SMALL_CAP: list[SymbolMeta] = [
     SymbolMeta("TARC", "SMALL", "RealEstate"),
     SymbolMeta("TATAINVEST", "SMALL", "FinancialServices"),
     SymbolMeta("TIPSMUSIC", "SMALL", "Media"),
-    SymbolMeta("TRENT", "SMALL", "Retail"),
     SymbolMeta("TRIVENI", "SMALL", "Diversified"),
     SymbolMeta("TVTODAY", "SMALL", "Media"),
     SymbolMeta("TVSMOTOR", "SMALL", "Auto"),
@@ -547,7 +544,6 @@ _SMALL_CAP: list[SymbolMeta] = [
     SymbolMeta("WELSPUNLIV", "SMALL", "Textiles"),
     SymbolMeta("WESTLIFE", "SMALL", "ConsumerDiscretionary"),
     SymbolMeta("WINDLAS", "SMALL", "Pharma"),
-    SymbolMeta("WOCKPHARMA", "SMALL", "Pharma"),
     SymbolMeta("WONDERLA", "SMALL", "Hospitality"),
     SymbolMeta("XCHANGING", "SMALL", "IT"),
     SymbolMeta("YASHO", "SMALL", "Chemicals"),
@@ -588,3 +584,31 @@ def symbols_by_sector(sector: str) -> list[str]:
 
 def all_sectors() -> list[str]:
     return sorted({m.sector for m in NIFTY500})
+
+
+# ---------------------------------------------------------------------------
+# Known symbol renames and mergers (informational — used by rebalance tooling)
+# Verified against NSE bhavcopy Oct 2026. Run scripts/sync_nifty500.py after
+# each semi-annual NSE rebalance (March, September) to refresh this list.
+# ---------------------------------------------------------------------------
+SYMBOL_RENAMES: dict[str, str] = {
+    "ZOMATO": "ETERNAL",
+    "MINDTREE": "LTIMINDTREE",
+    "ADANITRANS": "ADANIENT",
+    "TVSMOTORS": "TVSMOTOR",
+    "EQUITAS": "EQUITASBNK",
+    "IDFC": "IDFCFIRSTB",
+    "MCDOWELL-N": "MCDOWELLN",
+    "SHRIRAMCIT": "SHRIRAMFIN",
+    "SRTRANSFIN": "SHRIRAMFIN",
+    "AMARAJABAT": "AMARAJAELE",
+}
+
+_nifty500_count = len(NIFTY500)
+import logging as _logging_n500
+if _nifty500_count < 450 or _nifty500_count > 550:
+    _logging_n500.getLogger(__name__).warning(
+        "NIFTY 500 symbol list has %d entries (expected 450-550). "
+        "Run scripts/sync_nifty500.py to refresh from NSE.",
+        _nifty500_count,
+    )

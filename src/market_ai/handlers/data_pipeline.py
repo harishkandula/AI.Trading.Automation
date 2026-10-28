@@ -39,21 +39,43 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         return _run_daily(target_date)
 
 
+def _alert_pipeline_failure(target_date, reason: str) -> None:
+    log.error("Data pipeline failure for %s: %s", target_date, reason)
+    import os
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if bot_token and chat_id:
+        try:
+            from app.notifications import telegram
+            telegram.send(bot_token, chat_id,
+                f"Market AI: data pipeline produced 0 rows for {target_date}. {reason}. Manual check required.")
+        except Exception:
+            log.warning("Failed to send pipeline failure alert", exc_info=True)
+
+
 def _run_daily(target_date: date) -> dict:
     """Fetch yesterday's bhavcopy and append to S3 Parquet for all NIFTY 500 symbols."""
     from app.data.nifty500_symbols import all_symbols  # noqa: PLC0415
-    from app.data.providers.nse_bhavcopy import fetch_bhavcopy  # noqa: PLC0415
+    from app.data.providers.nse_bhavcopy import fetch_bhavcopy, BhavcopBlockedError  # noqa: PLC0415
     from app.data.store import ParquetStore  # noqa: PLC0415
+    from app.core.time_utils import is_trading_day  # noqa: PLC0415
 
     bucket = os.environ["DATA_BUCKET"]
     store = ParquetStore(bucket)
     symbols = set(all_symbols())
 
     log.info("Daily pipeline: fetching bhavcopy for %s", target_date)
-    df = fetch_bhavcopy(target_date)
+    try:
+        df = fetch_bhavcopy(target_date)
+    except BhavcopBlockedError as exc:
+        _alert_pipeline_failure(target_date, f"NSE IP block detected: {exc}")
+        return {"statusCode": 200, "body": {"date": str(target_date), "rows": 0, "symbols": 0, "error": "blocked"}}
 
     if df.empty:
-        log.warning("No bhavcopy data for %s (holiday or fetch failed)", target_date)
+        if is_trading_day(target_date):
+            _alert_pipeline_failure(target_date, "bhavcopy returned empty on a trading day — possible NSE block or CDN failure")
+        else:
+            log.info("No bhavcopy for %s (non-trading day)", target_date)
         return {"statusCode": 200, "body": {"date": str(target_date), "rows": 0, "symbols": 0}}
 
     # Filter to our universe only
@@ -61,6 +83,9 @@ def _run_daily(target_date: date) -> dict:
     updated = 0
     adjusted = 0
     for symbol, group in df.groupby("symbol"):
+        if _is_adjusted(store, str(symbol)):
+            log.info("Skipping bhavcopy append for %s — yfinance-adjusted series in place", symbol)
+            continue
         rows = group.to_dict("records")
         store.append_ohlcv(str(symbol), rows)
         updated += 1
@@ -215,11 +240,17 @@ def _run_backfill(event: dict) -> dict:
     # Phase 2 — S3 only: one read + one write per symbol for the whole chunk.
     total_rows = 0
     for symbol, rows in rows_by_symbol.items():
-        store.append_ohlcv(symbol, rows)
-        total_rows += len(rows)
+        try:
+            store.append_ohlcv(symbol, rows)
+            total_rows += len(rows)
+        except Exception:
+            log.warning("S3 write failed for %s — skipping", symbol, exc_info=True)
 
     # Save checkpoint so next invocation auto-resumes from here.
-    _save_checkpoint(chunk_end)
+    if total_rows > 0 or total_days > 0:
+        _save_checkpoint(chunk_end)
+    else:
+        log.warning("Backfill chunk %s->%s produced zero rows — NOT advancing checkpoint", start, chunk_end)
 
     next_start = chunk_end + timedelta(days=1)
     done = next_start > end
@@ -247,7 +278,7 @@ def _run_backfill(event: dict) -> dict:
 def _detect_split(store: object, symbol: str, today: date) -> bool:
     """Return True if today's close vs yesterday's close implies a corporate action.
 
-    A ratio outside [0.4, 2.5] on a single day is almost never a real price move —
+    A ratio outside [0.75, 1.35] on a single day is almost never a real price move —
     it indicates a stock split, reverse split, or bonus issue.
     """
     from app.data.store import ParquetStore  # noqa: PLC0415
@@ -264,8 +295,11 @@ def _detect_split(store: object, symbol: str, today: date) -> bool:
         today_close = float(df.iloc[-1]["close"])
         if prev_close <= 0:
             return False
+        if abs(today_close - prev_close) / prev_close < 0.01:
+            return False
         ratio = today_close / prev_close
-        if ratio < 0.4 or ratio > 2.5:
+        # NSE circuit limits cap single-day moves at 20%; beyond 35% is a corporate action
+        if ratio < 0.75 or ratio > 1.35:
             log.warning(
                 "Split signal for %s: prev_close=%.2f today_close=%.2f ratio=%.3f",
                 symbol, prev_close, today_close, ratio,
@@ -338,6 +372,7 @@ def _readjust_from_yfinance(store: object, symbol: str) -> bool:
         new_df = new_df.drop_duplicates(subset=["date"], keep="last")
         new_df = new_df.sort_values("date").reset_index(drop=True)
         store._write_parquet(f"ohlcv/daily/{symbol}.parquet", new_df)  # noqa: SLF001
+        _set_adjusted_flag(store, symbol, _date.today())
         log.info(
             "Re-adjusted %s with %d rows from yfinance (split-adjusted)",
             symbol, len(new_df),
@@ -348,6 +383,24 @@ def _readjust_from_yfinance(store: object, symbol: str) -> bool:
     except Exception:
         log.warning("Re-adjust failed for %s", symbol, exc_info=True)
     return False
+
+
+def _adjusted_flag_key(symbol: str) -> str:
+    return f"ohlcv/daily/{symbol}.adjusted_flag"
+
+
+def _is_adjusted(store, symbol: str) -> bool:
+    try:
+        store._s3.head_object(Bucket=store._bucket, Key=_adjusted_flag_key(symbol))
+        return True
+    except Exception:
+        return False
+
+
+def _set_adjusted_flag(store, symbol: str, today) -> None:
+    import json
+    body = json.dumps({"adjusted": True, "adjusted_date": str(today), "source": "yfinance"})
+    store._s3.put_object(Bucket=store._bucket, Key=_adjusted_flag_key(symbol), Body=body.encode())
 
 
 def _compute_indicators(store: object, symbols: list[str], as_of: date) -> None:

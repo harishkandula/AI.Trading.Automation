@@ -8,7 +8,31 @@ from zoneinfo import ZoneInfo
 log = logging.getLogger(__name__)
 
 IST = ZoneInfo("Asia/Kolkata")
-_WARMUP_DAYS = 100
+_WARMUP_DAYS = 400
+
+
+def _check_data_freshness(today) -> str | None:
+    import os
+    from app.data.store import ParquetStore
+    bucket = os.environ.get("DATA_BUCKET", "")
+    if not bucket:
+        return None
+    store = ParquetStore(bucket)
+    probe_symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
+    latest_dates = []
+    for sym in probe_symbols:
+        d = store.latest_date(sym)
+        if d:
+            latest_dates.append(d)
+    if not latest_dates:
+        return "WARNING: No S3 data found for probe symbols — data pipeline may have never run."
+    most_recent = max(latest_dates)
+    from app.core.time_utils import prev_trading_day
+    expected = prev_trading_day(today)
+    lag_days = (expected - most_recent).days
+    if lag_days > 1:
+        return f"WARNING: S3 data is stale — latest {most_recent}, expected {expected} ({lag_days} trading days behind). Signals may be based on old prices."
+    return None
 
 
 def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
@@ -28,6 +52,10 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     import app.strategies.intraday_support_supertrend  # noqa: F401, PLC0415
     import app.strategies.morning_star  # noqa: F401, PLC0415
     import app.strategies.rsi_supertrend_volume  # noqa: F401, PLC0415
+    import app.strategies.s00_benchmark  # noqa: F401, PLC0415
+    import app.strategies.s01_rs_momentum  # noqa: F401, PLC0415
+    import app.strategies.s02_vcp  # noqa: F401, PLC0415
+    import app.strategies.s03_trend_pullback  # noqa: F401, PLC0415
     from app.strategies.registry import all_strategies  # noqa: PLC0415
 
     if isinstance(event, dict) and event.get("_prewarm"):
@@ -35,6 +63,16 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         return {"statusCode": 200, "body": "warm"}
 
     today = datetime.now(tz=IST).date()
+
+    freshness_warning = _check_data_freshness(today)
+    if freshness_warning:
+        log.warning(freshness_warning)
+        try:
+            notifier = Notifier.from_secrets()
+            notifier.send_error_alert(freshness_warning)
+        except Exception:
+            log.debug("Could not send freshness warning via notifier", exc_info=True)
+
     start = today - timedelta(days=_WARMUP_DAYS)
 
     import os  # noqa: PLC0415
@@ -58,6 +96,9 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             scanned += 1
             for _sid, strategy_cls in strategies.items():
                 strategy = strategy_cls()
+                if strategy.timeframe == Timeframe.M5:
+                    log.debug("Skipping intraday strategy %s in daily scan", _sid)
+                    continue
                 if len(candles) < strategy.warmup_bars + 5:
                     log.debug(
                         "Skipping %s on %s — too few bars (%d < %d)",

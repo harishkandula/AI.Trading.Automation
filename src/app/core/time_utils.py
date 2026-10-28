@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -39,11 +40,36 @@ _NSE_HOLIDAYS_2026: set[date] = {
     date(2026, 8, 15),   # Independence Day
     date(2026, 9, 1),    # Ganesh Chaturthi (approx)
     date(2026, 10, 2),   # Gandhi Jayanti
-    date(2026, 10, 8),   # Dussehra (approx)
-    date(2026, 11, 5),   # Diwali / Guru Nanak Jayanti (approx)
+    date(2026, 10, 20),  # Diwali Laxmi Puja
+    date(2026, 10, 21),  # Balipratipada
+    date(2026, 10, 27),  # Dussehra
     date(2026, 12, 25),  # Christmas
 }
-_NSE_HOLIDAYS: set[date] = _NSE_HOLIDAYS_2024 | _NSE_HOLIDAYS_2025 | _NSE_HOLIDAYS_2026
+_NSE_HOLIDAYS_2027: set[date] = {
+    date(2027, 1, 26),   # Republic Day
+    date(2027, 2, 26),   # Maha Shivratri (approx)
+    date(2027, 3, 17),   # Holi (approx)
+    date(2027, 4, 2),    # Good Friday
+    date(2027, 4, 14),   # Dr. B.R. Ambedkar Jayanti
+    date(2027, 5, 1),    # Maharashtra Day / Labour Day
+    date(2027, 8, 15),   # Independence Day
+    date(2027, 8, 24),   # Ganesh Chaturthi (approx)
+    date(2027, 10, 2),   # Gandhi Jayanti
+    date(2027, 10, 19),  # Dussehra (approx)
+    date(2027, 11, 3),   # Diwali Laxmi Puja (approx)
+    date(2027, 11, 4),   # Balipratipada (approx)
+    date(2027, 12, 25),  # Christmas
+}
+_NSE_HOLIDAYS: set[date] = (
+    _NSE_HOLIDAYS_2024 | _NSE_HOLIDAYS_2025 | _NSE_HOLIDAYS_2026 | _NSE_HOLIDAYS_2027
+)
+
+_log = logging.getLogger(__name__)
+_COVERED_YEARS = {d.year for d in _NSE_HOLIDAYS}
+import datetime as _dt
+_this_year = _dt.date.today().year
+if _this_year not in _COVERED_YEARS:
+    _log.warning("NSE holiday list does not cover %d — is_trading_day() may be wrong. Update time_utils.py.", _this_year)
 
 
 def is_trading_day(d: date) -> bool:
