@@ -99,6 +99,8 @@ class S01RSMomentum(StrategyBase):
 
             if any(v is None for v in (ema50_v, ema200_v, rsi_v, atr_v, vol_v)):
                 continue
+            if vol_v == 0:
+                continue
 
             price = closes[i]
             reasons: list[str] = []

@@ -91,6 +91,8 @@ class S00Benchmark(StrategyBase):
 
             if any(v is None for v in (rsi_v, st.direction, atr_v, vol_v)):
                 continue
+            if vol_v == 0:
+                continue
 
             reasons: list[str] = []
 
