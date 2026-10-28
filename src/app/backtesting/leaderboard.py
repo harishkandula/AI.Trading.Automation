@@ -97,9 +97,12 @@ def read_latest_per_strategy() -> list[dict[str, Any]]:
 
 
 def rank_leaderboard(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sort entries by avg_sharpe descending (None treated as -inf)."""
-    def _key(e: dict[str, Any]) -> float:
-        v = e.get("avg_sharpe")
-        return float(v) if v is not None else float("-inf")
+    """Sort entries: positive-return strategies first (by Sharpe), then negative."""
+    def _key(e: dict[str, Any]) -> tuple[int, float]:
+        ret = e.get("avg_net_return_pct")
+        sharpe = e.get("avg_sharpe")
+        positive = 1 if (ret is not None and float(ret) > 0) else 0
+        sharpe_f = float(sharpe) if sharpe is not None else float("-inf")
+        return (positive, sharpe_f)
 
     return sorted(entries, key=_key, reverse=True)

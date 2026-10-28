@@ -106,14 +106,14 @@ def _score(df: Any) -> tuple[float, dict[str, Any]]:
 
     # 2. Long-term trend: close vs 200-day EMA (weight 20)
     ema200 = _ema(closes, 200)
-    above_ema = closes[-1] > ema200[-1] if ema200 is not None else False
+    above_ema = bool(closes[-1] > ema200[-1]) if ema200 is not None else False
     trend_score = 100.0 if above_ema else 30.0
 
     # 3. Trend consistency: % of last 200 days above 200d EMA (weight 20)
     if ema200 is not None and n >= 200:
         recent_closes = closes[-200:]
         recent_ema = ema200[-200:]
-        consistency = (recent_closes > recent_ema).mean() * 100
+        consistency = float((recent_closes > recent_ema).mean() * 100)
     else:
         consistency = 0.0
 
@@ -149,12 +149,12 @@ def _score(df: Any) -> tuple[float, dict[str, Any]]:
     )
 
     breakdown = {
-        "momentum_pct_of_52w_high": round(momentum * 100, 1),
+        "momentum_pct_of_52w_high": round(float(momentum * 100), 1),
         "above_ema200": above_ema,
         "trend_consistency_pct": round(consistency, 1),
-        "volume_ratio_20d_vs_avg": round(vol_ratio, 2),
-        "max_drawdown_pct": round(max_dd, 1),
-        "vol_adj_return_score": round(va_score, 1),
+        "volume_ratio_20d_vs_avg": round(float(vol_ratio), 2),
+        "max_drawdown_pct": round(float(max_dd), 1),
+        "vol_adj_return_score": round(float(va_score), 1),
     }
     return composite, breakdown
 
