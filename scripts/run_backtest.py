@@ -146,7 +146,7 @@ def main() -> None:
         print(f"  Sharpe ratio     : {m.get('sharpe_ratio', 'N/A')}")
         print(f"  Profit factor    : {m.get('profit_factor', 0)}")
         print(f"  Max drawdown     : {m.get('max_drawdown_pct', 0):.2f}%")
-        if args.universe in ("nifty50", "nifty_next50"):
+        if args.universe in ("nifty50", "nifty_next50", "nifty500"):
             print("  NOTE: Real historical data — still not a guarantee of future performance")
         else:
             print("  NOTE: SYNTHETIC DATA – not real strategy evidence")
