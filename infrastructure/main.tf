@@ -823,6 +823,74 @@ resource "aws_db_instance" "main" {
   deletion_protection = true
 }
 
+# ── Secrets Manager – OpenAI ─────────────────────────────────────────────────
+# Value must be populated manually (aws secretsmanager put-secret-value …)
+# or via CI/CD. Never stored in Terraform state.
+
+resource "aws_secretsmanager_secret" "openai" {
+  name        = "${local.name}/openai"
+  description = "OpenAI API key for weekly AI summary"
+}
+
+# Grant Lambda role permission to read the OpenAI secret
+resource "aws_iam_role_policy" "lambda_openai_secret" {
+  name = "${local.name}-lambda-openai-secret"
+  role = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = aws_secretsmanager_secret.openai.arn
+    }]
+  })
+}
+
+# ── SSM Parameter Store – runtime config ─────────────────────────────────────
+# These parameters can be updated without a Terraform or code deploy.
+# aws ssm put-parameter --name /market-ai-dev/portfolio_equity --value 750000 --overwrite
+
+resource "aws_ssm_parameter" "universe" {
+  name  = "/${local.name}/universe"
+  type  = "String"
+  value = var.universe
+}
+
+resource "aws_ssm_parameter" "portfolio_equity" {
+  name  = "/${local.name}/portfolio_equity"
+  type  = "String"
+  value = "500000"
+}
+
+resource "aws_ssm_parameter" "risk_max_open_positions" {
+  name  = "/${local.name}/risk/max_open_positions"
+  type  = "String"
+  value = "15"
+}
+
+resource "aws_ssm_parameter" "risk_max_sector_exposure" {
+  name  = "/${local.name}/risk/max_sector_exposure_pct"
+  type  = "String"
+  value = "0.30"
+}
+
+# Grant Lambda role SSM read access under the app parameter prefix
+resource "aws_iam_role_policy" "lambda_ssm" {
+  name = "${local.name}-lambda-ssm"
+  role = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssm:GetParameter",
+        "ssm:GetParametersByPath",
+      ]
+      Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${local.name}/*"
+    }]
+  })
+}
+
 # ── Outputs ───────────────────────────────────────────────────────────────────
 
 output "data_bucket" {
@@ -853,6 +921,24 @@ output "groww_secret_arn" {
 output "telegram_secret_arn" {
   value       = aws_secretsmanager_secret.telegram.arn
   description = "Secrets Manager ARN for Telegram credentials"
+}
+
+output "openai_secret_arn" {
+  value       = aws_secretsmanager_secret.openai.arn
+  description = "Secrets Manager ARN for OpenAI API key"
+}
+
+output "ssm_portfolio_equity_path" {
+  value       = aws_ssm_parameter.portfolio_equity.name
+  description = "SSM path for portfolio equity — update with: aws ssm put-parameter --name <path> --value <amount> --overwrite"
+}
+
+output "ssm_risk_config_paths" {
+  value = {
+    max_open_positions    = aws_ssm_parameter.risk_max_open_positions.name
+    max_sector_exposure   = aws_ssm_parameter.risk_max_sector_exposure.name
+  }
+  description = "SSM paths for runtime risk configuration"
 }
 
 output "rds_endpoint" {

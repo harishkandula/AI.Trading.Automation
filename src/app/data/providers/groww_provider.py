@@ -19,18 +19,20 @@ log = logging.getLogger(__name__)
 UTC = ZoneInfo("UTC")
 
 _GROWW_BASE = "https://api.groww.in/v1"
+# Charting service lives at a different path prefix
+_GROWW_CHART_BASE = "https://api.groww.in"
 
 _NSE_OPEN = time(9, 15)
 _NSE_CLOSE = time(15, 30)
 
-# Map Timeframe → Groww interval string (best-effort; adjust to docs)
+# Map Timeframe → Groww charting-service interval string
 _TF_TO_GROWW: dict[Timeframe, str] = {
     Timeframe.M1: "1",
     Timeframe.M5: "5",
     Timeframe.M15: "15",
     Timeframe.M30: "30",
     Timeframe.H1: "60",
-    Timeframe.D1: "1D",
+    Timeframe.D1: "1d",
 }
 
 
@@ -56,6 +58,13 @@ class GrowwDataProvider(MarketDataProvider):
     def _get(self, path: str, **params: object) -> dict:
         url = f"{_GROWW_BASE}{path}"
         resp = httpx.get(url, headers=self._headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _get_chart(self, path: str, **params: object) -> dict:
+        """GET against the Groww charting-service base URL (different path prefix)."""
+        url = f"{_GROWW_CHART_BASE}{path}"
+        resp = httpx.get(url, headers=self._headers(), params=params, timeout=30)
         resp.raise_for_status()
         return resp.json()
 
@@ -87,9 +96,11 @@ class GrowwDataProvider(MarketDataProvider):
         start: date,
         end: date,
     ) -> list[Candle]:
-        """Fetch OHLCV bars from Groww historical API.
+        """Fetch OHLCV bars from the Groww charting-service API.
 
-        Falls back to yfinance on any Groww error.
+        Uses ``GET /charting_service/v2/chart/historical`` with Unix-ms
+        timestamps.  Returns ``[]`` on 404 or empty response.  Falls back to
+        yfinance on any other Groww error.
         """
         bare = _strip_ns(symbol)
         interval = _TF_TO_GROWW.get(timeframe)
@@ -97,28 +108,46 @@ class GrowwDataProvider(MarketDataProvider):
             log.warning("Unsupported timeframe %s for Groww; returning []", timeframe)
             return []
 
+        # Convert date boundaries to Unix milliseconds.
+        # start_time = midnight IST on start date; end_time = 23:59:59 IST on end date
+        start_dt = datetime(start.year, start.month, start.day, 0, 0, 0, tzinfo=IST)
+        end_dt = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=IST)
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
+
         try:
-            data = self._get(
-                "/historical-data/candle",
-                exchange="NSE",
+            data = self._get_chart(
+                "/charting_service/v2/chart/historical",
                 trading_symbol=bare,
+                exchange="NSE",
+                start_time=start_ms,
+                end_time=end_ms,
                 interval=interval,
-                start_time=start.isoformat(),
-                end_time=end.isoformat(),
             )
             raw_candles: list[dict] = (
                 data.get("data") or data.get("candles") or []
             )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                log.info("Groww charting API returned 404 for %s — returning []", symbol)
+                return []
+            log.warning(
+                "Groww charting API HTTP %s for %s — falling back to yfinance",
+                exc.response.status_code,
+                symbol,
+                exc_info=True,
+            )
+            return self._yfinance_fallback(symbol, timeframe, start, end)
         except Exception:
             log.warning(
-                "Groww historical-data failed for %s — falling back to yfinance",
+                "Groww charting API failed for %s — falling back to yfinance",
                 symbol,
                 exc_info=True,
             )
             return self._yfinance_fallback(symbol, timeframe, start, end)
 
         if not raw_candles:
-            log.warning("Groww returned no candles for %s (%s – %s)", symbol, start, end)
+            log.info("Groww returned no candles for %s (%s – %s)", symbol, start, end)
             return []
 
         candles: list[Candle] = []

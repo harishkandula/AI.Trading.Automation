@@ -34,6 +34,9 @@ dev = [
     "freezegun>=1.5",
     "factory-boy>=3.3",
 ]
+ai = [
+    "openai>=1.30",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

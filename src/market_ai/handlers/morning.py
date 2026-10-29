@@ -57,7 +57,8 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     import app.strategies.s03_trend_pullback  # noqa: F401, PLC0415
     from app.strategies.registry import all_strategies  # noqa: PLC0415
     from app.research.scoring import StrategyFamily, score_signal  # noqa: PLC0415
-    from app.research.regime import MarketRegime  # noqa: PLC0415
+    from app.research.regime import MarketRegime, compute_regime  # noqa: PLC0415
+    from app.research.rs_compute import compute_rs_percentiles, compute_sector_ranks  # noqa: PLC0415
     from app.risk.engine import RiskConfig, RiskGuard, PortfolioSnapshot  # noqa: PLC0415
     from app.data.nifty500_symbols import SYMBOL_TO_SECTOR, SYMBOL_TO_SEGMENT  # noqa: PLC0415
 
@@ -85,6 +86,38 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     universe_name = os.environ.get("UNIVERSE", "nifty500")
     symbols = get_universe(universe_name)
     strategies = all_strategies()
+
+    # ── Compute market regime (best-effort) ──────────────────────────────────
+    regime = MarketRegime.UNKNOWN
+    try:
+        regime_snapshot = compute_regime(
+            store=provider._store,  # type: ignore[attr-defined]
+            symbols=symbols,
+            as_of=today,
+        )
+        regime = regime_snapshot.regime
+        log.info(
+            "Market regime: %s (ema50=%.1f%%, ema200=%.1f%%, new_highs=%.1f%%)",
+            regime.value,
+            regime_snapshot.pct_above_ema50,
+            regime_snapshot.pct_above_ema200,
+            regime_snapshot.new_highs_pct,
+        )
+    except Exception:
+        log.warning("Regime computation failed — falling back to UNKNOWN", exc_info=True)
+
+    # ── Compute RS percentiles across the full universe (best-effort) ────────
+    rs_percentiles: dict[str, float] = {}
+    sector_ranks: dict[str, int] = {}
+    try:
+        rs_percentiles = compute_rs_percentiles(symbols, today, provider)
+        sector_ranks = compute_sector_ranks(symbols, rs_percentiles, SYMBOL_TO_SECTOR)
+        log.info(
+            "RS percentiles computed for %d symbols; sector ranks for %d symbols",
+            len(rs_percentiles), len(sector_ranks),
+        )
+    except Exception:
+        log.warning("RS percentile computation failed — rs_percentile/sector_rank will be None", exc_info=True)
 
     all_signals = []
     scanned = 0
@@ -154,9 +187,9 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
                 symbol=sig.symbol,
                 strategy_id=sig.strategy_id,
                 family=fam,
-                regime=MarketRegime.UNKNOWN,   # regime computed separately; UNKNOWN = neutral
-                rs_percentile=None,
-                sector_rank=None,
+                regime=regime,
+                rs_percentile=rs_percentiles.get(sig.symbol),
+                sector_rank=sector_ranks.get(sig.symbol),
                 relative_volume=float(rel_vol),
                 families_triggered=families_by_symbol.get(sig.symbol, []),
             )
@@ -175,21 +208,76 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     # Sort by score descending
     scored_signals.sort(key=lambda s: s.indicators.get("score", 0), reverse=True)
 
+    # --- Paper trading: read real P&L before building portfolio snapshot ---
+    from app.paper_trading.journal import PaperTradeJournal  # noqa: PLC0415
+    from app.paper_trading.sizer import compute_qty  # noqa: PLC0415
+
+    journal = PaperTradeJournal()
+    pnl_today = 0.0
+    pnl_week = 0.0
+    try:
+        pnl_today = journal.get_pnl_today()
+        pnl_week = journal.get_pnl_week()
+        log.info("Paper P&L — today: %.2f  week: %.2f", pnl_today, pnl_week)
+    except Exception:
+        log.warning("Could not read paper P&L — using 0 (RiskGuard loss limits inactive)", exc_info=True)
+
     # Apply portfolio risk guards
-    portfolio = PortfolioSnapshot(equity=float(os.environ.get("PORTFOLIO_EQUITY", "500000")))
-    guard = RiskGuard(RiskConfig(), portfolio)
+    # Portfolio equity and risk config read from SSM (best-effort; falls back
+    # to env vars / RiskConfig defaults if SSM is unavailable).
+    from app.core.ssm_config import get_portfolio_equity, get_risk_config_from_ssm  # noqa: PLC0415
+    portfolio = PortfolioSnapshot(
+        equity=get_portfolio_equity(),
+        realised_pnl_today=pnl_today,
+        realised_pnl_this_week=pnl_week,
+    )
+    ssm_overrides = get_risk_config_from_ssm()
+    risk_cfg = RiskConfig(**ssm_overrides) if ssm_overrides else RiskConfig()
+    guard = RiskGuard(risk_cfg, portfolio)
     approved_signals = []
     rejected_by_risk = 0
     for sig in scored_signals:
         sector = SYMBOL_TO_SECTOR.get(sig.symbol, "UNKNOWN")
         segment = SYMBOL_TO_SEGMENT.get(sig.symbol, "UNKNOWN")
-        decision = guard.check(sig, sector=sector, segment=segment)
+        decision = guard.check(sig, sector=sector, segment=segment, as_of=today)
         if decision.approved:
             approved_signals.append(sig)
         else:
             rejected_by_risk += 1
             log.info("Risk rejected %s: %s", sig.symbol, decision.reason)
     scored_signals = approved_signals
+
+    # --- Open paper trades for every approved signal ---
+    # Re-use the equity already resolved via SSM / env var above.
+    portfolio_equity = portfolio.equity
+    for sig in scored_signals:
+        try:
+            if sig.entry_reference_price and sig.stop_price:
+                qty = compute_qty(
+                    entry_price=sig.entry_reference_price,
+                    stop_price=sig.stop_price,
+                    portfolio_equity=portfolio_equity,
+                )
+                trade_id = journal.open_trade(
+                    sig,
+                    entry_price=sig.entry_reference_price,
+                    qty=qty,
+                )
+                log.info(
+                    "Paper trade opened: %s qty=%d entry=%.2f stop=%.2f target=%s trade_id=%s",
+                    sig.symbol,
+                    qty,
+                    sig.entry_reference_price,
+                    sig.stop_price,
+                    f"{sig.target_prices[0]:.2f}" if sig.target_prices else "N/A",
+                    trade_id,
+                )
+            else:
+                log.debug(
+                    "Skipping paper trade for %s — missing entry/stop price", sig.symbol
+                )
+        except Exception:
+            log.warning("Could not open paper trade for %s", sig.symbol, exc_info=True)
 
     try:
         notifier = Notifier.from_secrets()

@@ -198,6 +198,148 @@ def _notify(today: date, candidates: list[dict[str, Any]]) -> None:
             "Price-based proxy only. Not investment advice.",
             "Market investments involve risk and possible capital loss.",
         ]
+
+        # ------------------------------------------------------------------
+        # AI summary — best-effort; never blocks the main notification
+        # ------------------------------------------------------------------
+        ai_summary = _build_ai_summary(today)
+        if ai_summary:
+            lines += ["", "<b>AI Market Summary</b>", ai_summary]
+
         telegram.send(notifier._bot_token, notifier._chat_id, "\n".join(lines))  # noqa: SLF001
     except Exception:
         log.warning("Weekly Telegram notification failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# AI summary helpers
+# ---------------------------------------------------------------------------
+
+def _build_ai_summary(today: date) -> str:
+    """Fetch all required data and call generate_weekly_summary.
+
+    Fully best-effort — any exception returns an empty string so the caller
+    can still send the main Telegram message unchanged.
+    """
+    try:
+        openai_key = _fetch_openai_key()
+        if not openai_key:
+            return ""
+
+        ranked_strategies = _fetch_leaderboard()
+        top_strategy = ranked_strategies[0].get("pk", "unknown") if ranked_strategies else "unknown"
+        paper_trades_closed = _fetch_closed_paper_trades_this_week(today)
+        regime = _fetch_current_regime()
+
+        # Signals this week: use a lightweight proxy — just the top candidates
+        # list (no separate DynamoDB query needed for the summary).  Callers
+        # can enrich this later when a SIGNAL PK is available in STATE_TABLE.
+        signals_this_week: list[dict[str, Any]] = []
+
+        from app.notifications.ai_summary import generate_weekly_summary  # noqa: PLC0415
+        return generate_weekly_summary(
+            top_strategy=top_strategy,
+            ranked_strategies=ranked_strategies,
+            signals_this_week=signals_this_week,
+            paper_trades_closed=paper_trades_closed,
+            regime=regime,
+            openai_api_key=openai_key,
+        )
+    except Exception:
+        log.warning("_build_ai_summary failed — AI summary omitted", exc_info=True)
+        return ""
+
+
+def _fetch_openai_key() -> str:
+    """Read the OpenAI API key from AWS Secrets Manager."""
+    try:
+        import json  # noqa: PLC0415
+        import boto3  # noqa: PLC0415
+
+        region = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
+        client = boto3.client("secretsmanager", region_name=region)
+        resp = client.get_secret_value(SecretId="market-ai-dev/openai")
+        secret = json.loads(resp["SecretString"])
+        return secret.get("api_key", "")
+    except Exception:
+        log.warning("Could not fetch OpenAI key from Secrets Manager", exc_info=True)
+        return ""
+
+
+def _fetch_leaderboard() -> list[dict[str, Any]]:
+    """Return ranked leaderboard entries from DynamoDB (best-effort)."""
+    try:
+        from app.backtesting.leaderboard import rank_leaderboard, read_latest_per_strategy  # noqa: PLC0415
+
+        entries = read_latest_per_strategy()
+        return rank_leaderboard(entries)
+    except Exception:
+        log.warning("Could not fetch leaderboard", exc_info=True)
+        return []
+
+
+def _fetch_closed_paper_trades_this_week(today: date) -> list[dict[str, Any]]:
+    """Query DynamoDB STATE_TABLE for paper trades closed this week."""
+    try:
+        import boto3  # noqa: PLC0415
+        from boto3.dynamodb.conditions import Attr  # noqa: PLC0415
+
+        table_name = os.environ.get("STATE_TABLE", "")
+        if not table_name:
+            return []
+
+        week_start = (today - timedelta(days=today.weekday() + 7)).isoformat()
+        week_end = today.isoformat()
+
+        dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_DEFAULT_REGION", "ap-south-1"))
+        table = dynamodb.Table(table_name)
+
+        closed_statuses = {
+            "CLOSED_TARGET", "CLOSED_STOP", "CLOSED_TIME", "CLOSED_EOD",
+        }
+
+        resp = table.scan(
+            FilterExpression=(
+                Attr("pk").begins_with("PAPER_TRADE")
+                & Attr("status").is_in(list(closed_statuses))
+                & Attr("closed_date").between(week_start, week_end)
+            )
+        )
+        items: list[dict[str, Any]] = resp.get("Items", [])
+
+        # Handle DynamoDB pagination
+        while "LastEvaluatedKey" in resp:
+            resp = table.scan(
+                FilterExpression=(
+                    Attr("pk").begins_with("PAPER_TRADE")
+                    & Attr("status").is_in(list(closed_statuses))
+                    & Attr("closed_date").between(week_start, week_end)
+                ),
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            items.extend(resp.get("Items", []))
+
+        log.info("Fetched %d paper trades closed this week", len(items))
+        return items
+    except Exception:
+        log.warning("Could not fetch closed paper trades", exc_info=True)
+        return []
+
+
+def _fetch_current_regime() -> str:
+    """Read the current market regime from DynamoDB STATE_TABLE."""
+    try:
+        import boto3  # noqa: PLC0415
+
+        table_name = os.environ.get("STATE_TABLE", "")
+        if not table_name:
+            return "UNKNOWN"
+
+        dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_DEFAULT_REGION", "ap-south-1"))
+        table = dynamodb.Table(table_name)
+        resp = table.get_item(Key={"pk": "REGIME", "sk": "current"})
+        item = resp.get("Item", {})
+        return str(item.get("regime", "UNKNOWN"))
+    except Exception:
+        log.warning("Could not fetch current regime", exc_info=True)
+        return "UNKNOWN"

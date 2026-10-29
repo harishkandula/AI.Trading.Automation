@@ -24,6 +24,7 @@ Usage in the morning handler:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 
@@ -94,7 +95,13 @@ class RiskGuard:
             self._sector_value[sect] = self._sector_value.get(sect, 0.0) + val
             self._segment_value[seg] = self._segment_value.get(seg, 0.0) + val
 
-    def check(self, signal: Any, sector: str = "UNKNOWN", segment: str = "UNKNOWN") -> RiskDecision:
+    def check(
+        self,
+        signal: Any,
+        sector: str = "UNKNOWN",
+        segment: str = "UNKNOWN",
+        as_of: date | None = None,
+    ) -> RiskDecision:
         cfg = self._cfg
         sig_id = getattr(signal, "signal_id", str(signal))
         symbol = getattr(signal, "symbol", "?")
@@ -178,6 +185,18 @@ class RiskGuard:
                     f"Segment {segment!r} exposure would exceed "
                     f"{cfg.max_segment_exposure_pct * 100:.0f}%",
                 )
+
+        # 9. Earnings blackout
+        try:
+            from app.data.earnings_calendar import has_upcoming_earnings  # noqa: PLC0415
+            _check_date = as_of if as_of is not None else date.today()
+            if has_upcoming_earnings(symbol, _check_date, window_days=3):
+                return RiskDecision(
+                    False, sig_id, symbol,
+                    f"Earnings blackout: {symbol} reports within 3 days",
+                )
+        except Exception:
+            pass  # calendar is best-effort — never block on failure
 
         # --- Approved: update running counters ---
         self._open_count += 1

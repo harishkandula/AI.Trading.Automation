@@ -33,7 +33,10 @@ log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
 _DEFAULT_TRAIN_ANCHOR = date(2019, 1, 1)
-_DEFAULT_TEST_OFFSET_YEARS = 4
+# Default first OOS window start for walk-forward.
+# Gives 2 years of initial training data (2019-01-01 → 2020-12-31) before the
+# first out-of-sample test window begins on 2021-01-01.
+_DEFAULT_WF_TEST_START = date(2021, 1, 1)
 _S3_PREFIX = "backtests"
 _WARMUP_BUFFER_DAYS = 120
 
@@ -70,10 +73,12 @@ def _run_backtest(event: Any, today: date) -> dict:
         if "start" in evt
         else _DEFAULT_TRAIN_ANCHOR
     )
-    test_start = (
+    # Walk-forward OOS start: default to 2021-01-01 (gives ~2 y initial training),
+    # overridable via "test_start" in the event payload.
+    wf_test_start = (
         date.fromisoformat(evt["test_start"])
         if "test_start" in evt
-        else start + timedelta(days=365 * _DEFAULT_TEST_OFFSET_YEARS)
+        else _DEFAULT_WF_TEST_START
     )
     universe_name: str = evt.get("universe", "nifty500")
     capital: float = float(evt.get("capital", 100_000.0))
@@ -89,8 +94,8 @@ def _run_backtest(event: Any, today: date) -> dict:
     )
 
     log.info(
-        "Backtest %s: universe=%s (%d symbols) train=%s test=%s→%s strategies=%d",
-        mode, universe_name, len(symbols), start, test_start, end, len(strategy_ids),
+        "Backtest %s: universe=%s (%d symbols) full-IS=%s→%s wf-OOS=%s→%s strategies=%d",
+        mode, universe_name, len(symbols), start, end, wf_test_start, end, len(strategy_ids),
     )
 
     bucket = _data_bucket()
@@ -98,11 +103,38 @@ def _run_backtest(event: Any, today: date) -> dict:
     s3_keys: dict[str, str] = {}
 
     if mode == "walk_forward":
-        s3_keys = _run_walk_forward_all(
-            strategy_ids, symbols, start, test_start, end,
+        # ── 1. Walk-forward (OOS validated) ──────────────────────────────────
+        wf_s3_keys, wf_results = _run_walk_forward_all(
+            strategy_ids, symbols, start, wf_test_start, end,
             capital, step_months, bucket, run_date, today,
         )
-        msg = _format_walk_forward_summary(run_date, start, test_start, end, universe_name, s3_keys)
+        s3_keys.update(wf_s3_keys)
+
+        # ── 2. Full in-sample backtest 2019-01-01 → today ───────────────────
+        from app.backtesting.runner import run_universe_backtest  # noqa: PLC0415
+        log.info("Running full in-sample backtest %s → %s", start, end)
+        is_results = run_universe_backtest(
+            symbols=symbols,
+            strategy_ids=strategy_ids,
+            start=start,
+            end=end,
+            initial_capital=capital,
+        )
+        if bucket:
+            is_s3_keys = _save_simple_to_s3(bucket, run_date, is_results)
+            s3_keys.update({f"{sid}_insample": k for sid, k in is_s3_keys.items()})
+
+        # ── 3. Persist combined walk_forward_results.json ───────────────────
+        if bucket and wf_results:
+            combined_key = _save_combined_walk_forward(
+                bucket, run_date, wf_results, is_results,
+            )
+            if combined_key:
+                s3_keys["_combined"] = combined_key
+
+        msg = _format_walk_forward_summary(
+            run_date, start, wf_test_start, end, universe_name, wf_s3_keys,
+        )
     else:
         from app.backtesting.runner import run_universe_backtest  # noqa: PLC0415
         results = run_universe_backtest(
@@ -127,7 +159,7 @@ def _run_backtest(event: Any, today: date) -> dict:
             "mode": mode,
             "run_date": run_date,
             "train_start": start.isoformat(),
-            "test_start": test_start.isoformat(),
+            "wf_test_start": wf_test_start.isoformat() if mode == "walk_forward" else None,
             "end": end.isoformat(),
             "universe": universe_name,
             "strategies_run": strategy_ids,
@@ -163,8 +195,15 @@ def _run_walk_forward_all(
     bucket: str,
     run_date: str,
     today: date,
-) -> dict[str, str]:
-    """Fetch candles once, run walk-forward per strategy, save results to S3."""
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Fetch candles once, run walk-forward per strategy, save results to S3.
+
+    Returns
+    -------
+    (s3_keys, wf_results)
+        s3_keys:    strategy_id → S3 key for the per-strategy JSON.
+        wf_results: strategy_id → WalkForwardResult (for building combined JSON).
+    """
     from app.backtesting.leaderboard import write_result as _leaderboard_write  # noqa: PLC0415
     from app.backtesting.walk_forward import run_walk_forward  # noqa: PLC0415
     from app.data.providers.hybrid_provider import HybridDataProvider  # noqa: PLC0415
@@ -205,6 +244,7 @@ def _run_walk_forward_all(
     )
 
     s3_keys: dict[str, str] = {}
+    wf_results: dict[str, Any] = {}
     for strategy_id in strategy_ids:
         try:
             t1 = time.monotonic()
@@ -218,6 +258,7 @@ def _run_walk_forward_all(
                 initial_capital=capital,
                 run_date=today,
             )
+            wf_results[strategy_id] = result
             if bucket:
                 key = _save_walk_forward_to_s3(bucket, run_date, result)
                 if key:
@@ -249,7 +290,7 @@ def _run_walk_forward_all(
         except Exception:
             log.warning("Walk-forward failed for %s", strategy_id, exc_info=True)
 
-    return s3_keys
+    return s3_keys, wf_results
 
 
 def _is_intraday(strategy_id: str) -> bool:
@@ -317,6 +358,110 @@ def _save_walk_forward_to_s3(bucket: str, run_date: str, result: Any) -> str:
         log.info("Saved walk-forward %s → s3://%s/%s", result.strategy_id, bucket, key)
     except Exception:
         log.warning("Failed to save walk-forward to S3: %s", result.strategy_id, exc_info=True)
+        return ""
+    return key
+
+
+def _save_combined_walk_forward(
+    bucket: str,
+    run_date: str,
+    wf_results: dict[str, Any],
+    is_results: dict[str, Any],
+) -> str:
+    """Save a single walk_forward_results.json combining per-window OOS metrics
+    and top-level in-sample metrics for every strategy that ran this session.
+
+    S3 key: backtests/{run_date}/walk_forward_results.json
+
+    Schema
+    ------
+    {
+      "run_date": "...",
+      "windows": [
+        {
+          "train_start": "2021-01-01", "train_end": "...",
+          "test_start": "...", "test_end": "...",
+          "strategies": {
+            "s02_vcp": {"sharpe": 1.2, "win_rate": 0.52, "avg_return": 0.031},
+            ...
+          }
+        }
+      ],
+      "summary": {
+        "s02_vcp": {
+          "avg_oos_sharpe": 1.1, "consistency_pct": 0.72,
+          "validated": true,
+          "insample_sharpe": 1.4, "insample_return_pct": 38.2
+        },
+        ...
+      }
+    }
+    """
+    import json  # noqa: PLC0415
+    import boto3  # noqa: PLC0415
+
+    key = f"{_S3_PREFIX}/{run_date}/walk_forward_results.json"
+
+    # ── windows section: one entry per OOS test window ──────────────────────
+    # Collect all unique window slots across strategies (keyed by test_start).
+    window_map: dict[str, dict[str, Any]] = {}
+    for strategy_id, result in wf_results.items():
+        for w in result.windows:
+            slot_key = w.test_start.isoformat()
+            if slot_key not in window_map:
+                window_map[slot_key] = {
+                    "train_start": w.train_start.isoformat(),
+                    "train_end":   w.train_end.isoformat(),
+                    "test_start":  w.test_start.isoformat(),
+                    "test_end":    w.test_end.isoformat(),
+                    "strategies":  {},
+                }
+            m = w.metrics
+            if "error" not in m:
+                window_map[slot_key]["strategies"][strategy_id] = {
+                    "sharpe":      m.get("sharpe_ratio"),
+                    "win_rate":    round((m.get("win_rate_pct") or 0.0) / 100, 4),
+                    "avg_return":  round((m.get("net_return_pct") or 0.0) / 100, 4),
+                    "max_drawdown": round((m.get("max_drawdown_pct") or 0.0) / 100, 4),
+                    "trade_count": w.trade_count,
+                }
+
+    windows_list = [window_map[k] for k in sorted(window_map)]
+
+    # ── summary section: per-strategy aggregated OOS + in-sample headline ──
+    summary: dict[str, Any] = {}
+    for strategy_id, result in wf_results.items():
+        agg = result.aggregated
+        is_m = (is_results.get(strategy_id) or {}).get("metrics", {})
+        summary[strategy_id] = {
+            "avg_oos_sharpe":      agg.get("avg_sharpe"),
+            "consistency_pct":     agg.get("consistency_score"),
+            "avg_oos_return_pct":  agg.get("avg_net_return_pct"),
+            "avg_oos_drawdown_pct": agg.get("avg_max_drawdown_pct"),
+            "total_oos_trades":    agg.get("total_oos_trades"),
+            "validated":           agg.get("validated"),
+            # In-sample headline figures for comparison
+            "insample_sharpe":        is_m.get("sharpe_ratio"),
+            "insample_return_pct":    is_m.get("net_return_pct"),
+            "insample_max_drawdown_pct": is_m.get("max_drawdown_pct"),
+        }
+
+    payload: dict[str, Any] = {
+        "run_date": run_date,
+        "windows": windows_list,
+        "summary": summary,
+    }
+
+    try:
+        s3 = boto3.client("s3")
+        s3.put_object(
+            Bucket=bucket, Key=key,
+            Body=json.dumps(payload, indent=2, default=str),
+            ContentType="application/json",
+        )
+        log.info("Saved combined walk_forward_results.json → s3://%s/%s", bucket, key)
+    except Exception:
+        log.warning("Failed to save combined walk_forward_results.json", exc_info=True)
         return ""
     return key
 
