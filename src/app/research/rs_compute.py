@@ -43,7 +43,8 @@ def compute_rs_percentiles(
     """
     from app.models.candle import Timeframe  # noqa: PLC0415
 
-    lookback_start = as_of - timedelta(days=lookback_days + 10)  # extra buffer for weekends/holidays
+    # extra 10-day buffer for weekends/holidays
+    lookback_start = as_of - timedelta(days=lookback_days + 10)
 
     returns: dict[str, float] = {}
     skipped = 0

@@ -31,7 +31,10 @@ def _check_data_freshness(today) -> str | None:
     expected = prev_trading_day(today)
     lag_days = (expected - most_recent).days
     if lag_days > 1:
-        return f"WARNING: S3 data is stale — latest {most_recent}, expected {expected} ({lag_days} trading days behind). Signals may be based on old prices."
+        return (
+            f"WARNING: S3 data is stale — latest {most_recent}, expected {expected} "
+            f"({lag_days} trading days behind). Signals may be based on old prices."
+        )
     return None
 
 
@@ -116,7 +119,10 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             len(rs_percentiles), len(sector_ranks),
         )
     except Exception:
-        log.warning("RS percentile computation failed — rs_percentile/sector_rank will be None", exc_info=True)
+        log.warning(
+            "RS percentile computation failed — rs_percentile/sector_rank will be None",
+            exc_info=True,
+        )
 
     all_signals = []
     scanned = 0

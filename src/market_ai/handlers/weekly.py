@@ -291,7 +291,8 @@ def _fetch_closed_paper_trades_this_week(today: date) -> list[dict[str, Any]]:
         week_start = (today - timedelta(days=today.weekday() + 7)).isoformat()
         week_end = today.isoformat()
 
-        dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_DEFAULT_REGION", "ap-south-1"))
+        _region = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
+        dynamodb = boto3.resource("dynamodb", region_name=_region)
         table = dynamodb.Table(table_name)
 
         closed_statuses = {
@@ -335,7 +336,8 @@ def _fetch_current_regime() -> str:
         if not table_name:
             return "UNKNOWN"
 
-        dynamodb = boto3.resource("dynamodb", region_name=os.environ.get("AWS_DEFAULT_REGION", "ap-south-1"))
+        _region = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
+        dynamodb = boto3.resource("dynamodb", region_name=_region)
         table = dynamodb.Table(table_name)
         resp = table.get_item(Key={"pk": "REGIME", "sk": "current"})
         item = resp.get("Item", {})
