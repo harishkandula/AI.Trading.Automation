@@ -827,12 +827,8 @@ resource "aws_db_instance" "main" {
 # Value must be populated manually (aws secretsmanager put-secret-value …)
 # or via CI/CD. Never stored in Terraform state.
 
-resource "aws_secretsmanager_secret" "openai" {
-  name        = "${local.name}/openai"
-  description = "OpenAI API key for weekly AI summary"
-}
-
-# Grant Lambda role permission to read the OpenAI secret
+# OpenAI secret already exists in Secrets Manager (created manually).
+# We only grant Lambda permission to read it — no resource block needed.
 resource "aws_iam_role_policy" "lambda_openai_secret" {
   name = "${local.name}-lambda-openai-secret"
   role = aws_iam_role.lambda.id
@@ -841,7 +837,7 @@ resource "aws_iam_role_policy" "lambda_openai_secret" {
     Statement = [{
       Effect   = "Allow"
       Action   = "secretsmanager:GetSecretValue"
-      Resource = aws_secretsmanager_secret.openai.arn
+      Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name}/openai*"
     }]
   })
 }
@@ -924,8 +920,8 @@ output "telegram_secret_arn" {
 }
 
 output "openai_secret_arn" {
-  value       = aws_secretsmanager_secret.openai.arn
-  description = "Secrets Manager ARN for OpenAI API key"
+  value       = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${local.name}/openai"
+  description = "Secrets Manager ARN for OpenAI API key (pre-existing secret)"
 }
 
 output "ssm_portfolio_equity_path" {
