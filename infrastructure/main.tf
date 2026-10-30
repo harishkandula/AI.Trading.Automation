@@ -931,8 +931,8 @@ output "ssm_portfolio_equity_path" {
 
 output "ssm_risk_config_paths" {
   value = {
-    max_open_positions    = aws_ssm_parameter.risk_max_open_positions.name
-    max_sector_exposure   = aws_ssm_parameter.risk_max_sector_exposure.name
+    max_open_positions  = aws_ssm_parameter.risk_max_open_positions.name
+    max_sector_exposure = aws_ssm_parameter.risk_max_sector_exposure.name
   }
   description = "SSM paths for runtime risk configuration"
 }
