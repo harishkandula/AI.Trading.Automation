@@ -26,8 +26,8 @@ _DEFAULT_HOLDING_SESSIONS = 10  # close after 10 sessions if no exit was set
 
 
 def monitor_open_trades(
-    journal: "PaperTradeJournal",
-    provider: "HybridDataProvider",
+    journal: PaperTradeJournal,
+    provider: HybridDataProvider,
     today: date,
 ) -> dict:
     """Check all open paper trades against today's price data.
@@ -79,7 +79,6 @@ def monitor_open_trades(
             # Use the last (most recent) candle for the requested date
             candle = candles[-1]
 
-            entry_price: float = float(trade["entry_price"])
             stop_price: float | None = trade.get("stop_price")
             target_price: float | None = trade.get("target_price")
             entry_date_iso: str = trade.get("entry_date", today.isoformat())

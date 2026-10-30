@@ -47,8 +47,11 @@ def _alert_pipeline_failure(target_date, reason: str) -> None:
     if bot_token and chat_id:
         try:
             from app.notifications import telegram
-            telegram.send(bot_token, chat_id,
-                f"Market AI: data pipeline produced 0 rows for {target_date}. {reason}. Manual check required.")
+            telegram.send(
+                bot_token, chat_id,
+                f"Market AI: data pipeline 0 rows for {target_date}. {reason}."
+                " Manual check required.",
+            )
         except Exception:
             log.warning("Failed to send pipeline failure alert", exc_info=True)
 
@@ -69,11 +72,17 @@ def _run_daily(target_date: date) -> dict:
         df = fetch_bhavcopy(target_date)
     except BhavcopBlockedError as exc:
         _alert_pipeline_failure(target_date, f"NSE IP block detected: {exc}")
-        return {"statusCode": 200, "body": {"date": str(target_date), "rows": 0, "symbols": 0, "error": "blocked"}}
+        return {
+            "statusCode": 200,
+            "body": {"date": str(target_date), "rows": 0, "symbols": 0, "error": "blocked"},
+        }
 
     if df.empty:
         if is_trading_day(target_date):
-            _alert_pipeline_failure(target_date, "bhavcopy returned empty on a trading day — possible NSE block or CDN failure")
+            _alert_pipeline_failure(
+                target_date,
+                "bhavcopy returned empty on a trading day — possible NSE block or CDN failure",
+            )
         else:
             log.info("No bhavcopy for %s (non-trading day)", target_date)
         return {"statusCode": 200, "body": {"date": str(target_date), "rows": 0, "symbols": 0}}
@@ -250,7 +259,10 @@ def _run_backfill(event: dict) -> dict:
     if total_rows > 0 or total_days > 0:
         _save_checkpoint(chunk_end)
     else:
-        log.warning("Backfill chunk %s->%s produced zero rows — NOT advancing checkpoint", start, chunk_end)
+        log.warning(
+            "Backfill chunk %s->%s produced zero rows — NOT advancing checkpoint",
+            start, chunk_end,
+        )
 
     next_start = chunk_end + timedelta(days=1)
     done = next_start > end
@@ -349,13 +361,13 @@ def _readjust_from_yfinance(store: object, symbol: str) -> bool:
                     d = ts_raw.astimezone(IST).date()
                 else:
                     d = ts_raw.date()
-                o, h, l, c, v = (
+                o, h, lo, c, v = (
                     float(row["Open"]), float(row["High"]),
                     float(row["Low"]), float(row["Close"]), float(row["Volume"]),
                 )
                 if c > 0:
                     rows.append({
-                        "date": d, "open": o, "high": h, "low": l,
+                        "date": d, "open": o, "high": h, "low": lo,
                         "close": c, "volume": v,
                         "source": "yfinance_adjusted", "adjusted": True,
                     })

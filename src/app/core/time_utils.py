@@ -66,10 +66,13 @@ _NSE_HOLIDAYS: set[date] = (
 
 _log = logging.getLogger(__name__)
 _COVERED_YEARS = {d.year for d in _NSE_HOLIDAYS}
-import datetime as _dt
-_this_year = _dt.date.today().year
+_this_year = date.today().year
 if _this_year not in _COVERED_YEARS:
-    _log.warning("NSE holiday list does not cover %d — is_trading_day() may be wrong. Update time_utils.py.", _this_year)
+    _log.warning(
+        "NSE holiday list does not cover %d — is_trading_day() may be wrong."
+        " Update time_utils.py.",
+        _this_year,
+    )
 
 
 def is_trading_day(d: date) -> bool:

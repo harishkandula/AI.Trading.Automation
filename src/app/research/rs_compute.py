@@ -139,7 +139,7 @@ def compute_sector_ranks(
         sector_buckets.setdefault(sector, []).append((sym, rs_percentiles[sym]))
 
     sector_ranks: dict[str, int] = {}
-    for sector, members in sector_buckets.items():
+    for _sector, members in sector_buckets.items():
         # Sort descending by RS percentile — rank 1 = highest percentile
         members_sorted = sorted(members, key=lambda x: x[1], reverse=True)
         for rank_1based, (sym, _) in enumerate(members_sorted, start=1):

@@ -10,6 +10,7 @@ Source: NSE India index page, constituents as of October 2026.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 
@@ -605,9 +606,8 @@ SYMBOL_RENAMES: dict[str, str] = {
 }
 
 _nifty500_count = len(NIFTY500)
-import logging as _logging_n500
 if _nifty500_count < 450 or _nifty500_count > 550:
-    _logging_n500.getLogger(__name__).warning(
+    logging.getLogger(__name__).warning(
         "NIFTY 500 symbol list has %d entries (expected 450-550). "
         "Run scripts/sync_nifty500.py to refresh from NSE.",
         _nifty500_count,

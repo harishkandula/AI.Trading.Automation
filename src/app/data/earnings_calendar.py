@@ -8,7 +8,7 @@ Symbols not present → has_upcoming_earnings returns False (no blackout).
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 # Top-50 NIFTY 500 symbols with approximate quarterly earnings dates.
 # Each list has 4 dates: Q4 (Jan), Q1 (Apr), Q2 (Jul), Q3 (Oct)

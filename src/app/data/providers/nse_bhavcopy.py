@@ -198,7 +198,10 @@ def _fetch_with_client(client: httpx.Client, d: date) -> pd.DataFrame:
                 log.debug("Bhavcopy CDN OK for %s (%d rows)", d, len(df))
                 return df
             if not df.empty and len(df) < 100:
-                log.debug("CDN response suspiciously small (%d rows) for %s, trying archive", len(df), d)
+                log.debug(
+                    "CDN response suspiciously small (%d rows) for %s, trying archive",
+                    len(df), d,
+                )
             else:
                 log.debug("CDN response parsed empty for %s, trying archive", d)
         elif resp.status_code != 404:

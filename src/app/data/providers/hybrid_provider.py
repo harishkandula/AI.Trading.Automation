@@ -113,7 +113,10 @@ class HybridDataProvider(MarketDataProvider):
                 bare, len(missing),
             )
             if df.empty or not stored_dates:
-                log.warning("No S3 data at all for %s (fill_gaps=False) — symbol may not be backfilled", bare)
+                log.warning(
+                    "No S3 data at all for %s (fill_gaps=False) — symbol may not be backfilled",
+                    bare,
+                )
             else:
                 latest_stored = max(stored_dates)
                 if (end - latest_stored).days > 3:

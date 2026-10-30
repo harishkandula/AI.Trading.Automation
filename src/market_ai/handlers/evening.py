@@ -63,7 +63,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     from app.research.scoring import StrategyFamily, score_signal  # noqa: PLC0415
     from app.research.regime import MarketRegime, compute_regime  # noqa: PLC0415
     from app.research.rs_compute import compute_rs_percentiles, compute_sector_ranks  # noqa: PLC0415
-    from app.data.nifty500_symbols import SYMBOL_TO_SECTOR, SYMBOL_TO_SEGMENT  # noqa: PLC0415
+    from app.data.nifty500_symbols import SYMBOL_TO_SECTOR  # noqa: PLC0415
 
     if isinstance(event, dict) and event.get("_prewarm"):
         log.info("Pre-warm ping received — container ready")

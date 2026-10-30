@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -40,8 +40,7 @@ _PK = "PAPER_TRADE"
 _IST = ZoneInfo("Asia/Kolkata")
 
 
-def _today_ist() -> "date":  # noqa: F821
-    from datetime import date as _date  # local import avoids re-export confusion
+def _today_ist() -> date:
     return datetime.now(tz=_IST).date()
 
 

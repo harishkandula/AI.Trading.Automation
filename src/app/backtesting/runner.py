@@ -156,7 +156,10 @@ def run_universe_backtest(
 
         all_trades: list[Trade] = state.closed_trades
         if state.open_trades:
-            log.info("  %s: %d open trades at period end excluded from metrics", strategy_id, len(state.open_trades))
+            log.info(
+                "  %s: %d open trades at period end excluded from metrics",
+                strategy_id, len(state.open_trades),
+            )
         metrics = compute_metrics(
             all_trades,
             state.equity_curve,

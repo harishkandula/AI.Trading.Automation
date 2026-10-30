@@ -226,7 +226,10 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         pnl_week = journal.get_pnl_week()
         log.info("Paper P&L — today: %.2f  week: %.2f", pnl_today, pnl_week)
     except Exception:
-        log.warning("Could not read paper P&L — using 0 (RiskGuard loss limits inactive)", exc_info=True)
+        log.warning(
+            "Could not read paper P&L — using 0 (RiskGuard loss limits inactive)",
+            exc_info=True,
+        )
 
     # Apply portfolio risk guards
     # Portfolio equity and risk config read from SSM (best-effort; falls back
