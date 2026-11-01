@@ -38,12 +38,67 @@ def _check_data_freshness(today) -> str | None:
     return None
 
 
+def _persist_regime(regime_snapshot, today) -> None:
+    """Write regime to STATE_TABLE so dashboard and weekly handler can read it."""
+    import os
+    import boto3
+    table_name = os.environ.get("STATE_TABLE", "")
+    if not table_name:
+        return
+    try:
+        table = boto3.resource("dynamodb").Table(table_name)
+        table.put_item(Item={
+            "pk": "REGIME",
+            "sk": "current",
+            "regime": regime_snapshot.regime.value,
+            "as_of": today.isoformat(),
+            "pct_above_ema50": str(round(regime_snapshot.pct_above_ema50, 1)),
+            "pct_above_ema200": str(round(regime_snapshot.pct_above_ema200, 1)),
+            "new_highs_pct": str(round(regime_snapshot.new_highs_pct, 1)),
+        })
+        log.info("Regime persisted to DynamoDB: %s", regime_snapshot.regime.value)
+    except Exception:
+        log.warning("Could not persist regime to DynamoDB", exc_info=True)
+
+
+def _persist_signals(signals, today) -> None:
+    """Write approved signals to STATE_TABLE so dashboard Live Signals page has data."""
+    import os
+    import boto3
+    table_name = os.environ.get("STATE_TABLE", "")
+    if not table_name or not signals:
+        return
+    try:
+        table = boto3.resource("dynamodb").Table(table_name)
+        from decimal import Decimal
+        date_str = today.isoformat()
+        with table.batch_writer() as batch:
+            for sig in signals:
+                item = {
+                    "pk": f"SIGNAL_{date_str}",
+                    "sk": f"{sig.symbol}_{sig.strategy_id}",
+                    "symbol": sig.symbol,
+                    "strategy_id": sig.strategy_id,
+                    "signal_date": date_str,
+                    "entry_price": Decimal(str(round(sig.entry_reference_price, 2))) if sig.entry_reference_price else None,
+                    "stop_price": Decimal(str(round(sig.stop_price, 2))) if sig.stop_price else None,
+                    "score": Decimal(str(sig.indicators.get("score", 0))),
+                    "status": sig.status.value if hasattr(sig.status, "value") else str(sig.status),
+                }
+                # strip None values — DynamoDB rejects them
+                batch.put_item(Item={k: v for k, v in item.items() if v is not None})
+        log.info("Persisted %d signals to DynamoDB for %s", len(signals), date_str)
+    except Exception:
+        log.warning("Could not persist signals to DynamoDB", exc_info=True)
+
+
 def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
-    """AWS Lambda entry-point for the morning scan (07:00 IST Mon-Fri).
+    """
+    AWS Lambda entry-point for the morning scan (07:00 IST Mon-Fri).
 
     All heavy imports are deferred inside this function so they execute during
-    the INVOKE phase, not INIT. Lambda's INIT phase has a hard 10 s limit; pandas
-    + numpy + yfinance together take ~9 s to import on a cold container.
+    the INVOKE phase, not INIT. Lambda's INIT phase has a hard 10 s limit;
+    pandas + numpy + yfinance together take ~9 s to import on a cold container.
     """
     # --- deferred imports (keep INIT phase < 1 s) ---
     from app.data.providers.hybrid_provider import HybridDataProvider  # noqa: PLC0415
@@ -62,7 +117,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     from app.research.scoring import StrategyFamily, score_signal  # noqa: PLC0415
     from app.research.regime import MarketRegime, compute_regime  # noqa: PLC0415
     from app.research.rs_compute import compute_rs_percentiles, compute_sector_ranks  # noqa: PLC0415
-    from app.risk.engine import RiskConfig, RiskGuard, PortfolioSnapshot  # noqa: PLC0415
+    from app.risk.engine import RiskConfig, RiskGuard, PortfolioSnapshot, build_portfolio_snapshot  # noqa: PLC0415
     from app.data.nifty500_symbols import SYMBOL_TO_SECTOR, SYMBOL_TO_SEGMENT  # noqa: PLC0415
 
     if isinstance(event, dict) and event.get("_prewarm"):
@@ -83,15 +138,14 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     start = today - timedelta(days=_WARMUP_DAYS)
 
     import os  # noqa: PLC0415
-    # fill_gaps=False: reads S3 only — data pipeline already ran before market open.
-    # Avoids 500+ Groww/yfinance calls that cause 120s timeout.
     provider = HybridDataProvider(fill_gaps=False)
     universe_name = os.environ.get("UNIVERSE", "nifty500")
     symbols = get_universe(universe_name)
     strategies = all_strategies()
 
-    # ── Compute market regime (best-effort) ──────────────────────────────────
+    # ── Compute market regime (best-effort) ────────────────────────────────────────
     regime = MarketRegime.UNKNOWN
+    regime_snapshot = None
     try:
         regime_snapshot = compute_regime(
             store=provider._store,  # type: ignore[attr-defined]
@@ -106,10 +160,11 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             regime_snapshot.pct_above_ema200,
             regime_snapshot.new_highs_pct,
         )
+        _persist_regime(regime_snapshot, today)
     except Exception:
         log.warning("Regime computation failed — falling back to UNKNOWN", exc_info=True)
 
-    # ── Compute RS percentiles across the full universe (best-effort) ────────
+    # ── Compute RS percentiles across the full universe (best-effort) ────────────
     rs_percentiles: dict[str, float] = {}
     sector_ranks: dict[str, int] = {}
     try:
@@ -151,8 +206,6 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
                 try:
                     signals = strategy.generate_signals(symbol, candles)
                     for sig in signals:
-                        # planned_entry_timestamp is next-session open (today).
-                        # signal_timestamp is the candle that triggered it (yesterday).
                         entry_date = (
                             sig.planned_entry_timestamp.date()
                             if sig.planned_entry_timestamp else sig.signal_timestamp.date()
@@ -167,7 +220,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             log.warning("Failed to process %s", symbol, exc_info=True)
             errors += 1
 
-    # Score and rank signals (best-effort — missing RS data gets neutral score)
+    # Score and rank signals
     _FAMILY_MAP = {
         "s00_benchmark": StrategyFamily.MOMENTUM,
         "s01_rs_momentum": StrategyFamily.MOMENTUM,
@@ -178,7 +231,6 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         "morning_star": StrategyFamily.PULLBACK,
         "intraday_support_supertrend": StrategyFamily.MOMENTUM,
     }
-    # Detect multi-family confluence per symbol
     families_by_symbol: dict[str, list[str]] = {}
     for sig in all_signals:
         fam = _FAMILY_MAP.get(sig.strategy_id, StrategyFamily.MOMENTUM).value
@@ -211,32 +263,40 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             log.debug("Scoring failed for %s", sig.symbol, exc_info=True)
         scored_signals.append(sig)
 
-    # Sort by score descending
     scored_signals.sort(key=lambda s: s.indicators.get("score", 0), reverse=True)
 
-    # --- Paper trading: read real P&L before building portfolio snapshot ---
+    # --- Paper trading: read real P&L and open positions before risk guard ---
     from app.paper_trading.journal import PaperTradeJournal  # noqa: PLC0415
     from app.paper_trading.sizer import compute_qty  # noqa: PLC0415
 
     journal = PaperTradeJournal()
     pnl_today = 0.0
     pnl_week = 0.0
+    open_trades_list = []
     try:
         pnl_today = journal.get_pnl_today()
         pnl_week = journal.get_pnl_week()
-        log.info("Paper P&L — today: %.2f  week: %.2f", pnl_today, pnl_week)
+        open_trades_list = journal.get_open_trades()
+        log.info(
+            "Paper P&L — today: %.2f  week: %.2f  open: %d",
+            pnl_today, pnl_week, len(open_trades_list),
+        )
     except Exception:
         log.warning(
-            "Could not read paper P&L — using 0 (RiskGuard loss limits inactive)",
+            "Could not read paper P&L/positions — using 0 (RiskGuard limits inactive)",
             exc_info=True,
         )
 
-    # Apply portfolio risk guards
-    # Portfolio equity and risk config read from SSM (best-effort; falls back
-    # to env vars / RiskConfig defaults if SSM is unavailable).
     from app.core.ssm_config import get_portfolio_equity, get_risk_config_from_ssm  # noqa: PLC0415
-    portfolio = PortfolioSnapshot(
-        equity=get_portfolio_equity(),
+    portfolio_equity = get_portfolio_equity()
+
+    # Build snapshot with real open positions so sector/segment caps apply
+    portfolio = build_portfolio_snapshot(
+        open_trades=open_trades_list,
+        symbol_to_sector=SYMBOL_TO_SECTOR,
+        symbol_to_segment=SYMBOL_TO_SEGMENT,
+        current_prices={},  # no live prices; current_value falls back to entry_price * qty
+        equity=portfolio_equity,
         realised_pnl_today=pnl_today,
         realised_pnl_this_week=pnl_week,
     )
@@ -256,9 +316,10 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             log.info("Risk rejected %s: %s", sig.symbol, decision.reason)
     scored_signals = approved_signals
 
+    # Persist approved signals to DynamoDB for the dashboard
+    _persist_signals(scored_signals, today)
+
     # --- Open paper trades for every approved signal ---
-    # Re-use the equity already resolved via SSM / env var above.
-    portfolio_equity = portfolio.equity
     for sig in scored_signals:
         try:
             if sig.entry_reference_price and sig.stop_price:
