@@ -116,8 +116,8 @@ class PaperTradeJournal:
         trade_id = self._trade_id(signal.symbol, today)
 
         item: dict[str, Any] = {
-            "PK": _PK,
-            "SK": trade_id,
+            "pk": _PK,
+            "sk": trade_id,
             "symbol": signal.symbol,
             "strategy_id": signal.strategy_id,
             "entry_price": self._dec(entry_price),
@@ -137,7 +137,7 @@ class PaperTradeJournal:
     def close_trade(self, trade_id: str, exit_price: float, exit_reason: str) -> dict:
         """Mark a trade closed. Returns the updated trade dict with pnl."""
         table = self._get_table()
-        resp = table.get_item(Key={"PK": _PK, "SK": trade_id})
+        resp = table.get_item(Key={"pk": _PK, "sk": trade_id})
         raw = resp.get("Item")
         if not raw:
             raise KeyError(f"Trade {trade_id} not found in journal")
@@ -153,7 +153,7 @@ class PaperTradeJournal:
         today_iso = _today_ist().isoformat()
 
         table.update_item(
-            Key={"PK": _PK, "SK": trade_id},
+            Key={"pk": _PK, "sk": trade_id},
             UpdateExpression=(
                 "SET exit_price = :ep, exit_date = :ed, "
                 "exit_reason = :er, pnl = :pnl, #st = :st"
@@ -179,7 +179,7 @@ class PaperTradeJournal:
         """Return all open paper trades."""
         try:
             return self._query_all(
-                KeyConditionExpression=Key("PK").eq(_PK),
+                KeyConditionExpression=Key("pk").eq(_PK),
                 FilterExpression=Attr("status").eq("OPEN"),
             )
         except Exception:
@@ -191,7 +191,7 @@ class PaperTradeJournal:
         try:
             today_iso = _today_ist().isoformat()
             return self._query_all(
-                KeyConditionExpression=Key("PK").eq(_PK),
+                KeyConditionExpression=Key("pk").eq(_PK),
                 FilterExpression=(
                     Attr("status").eq("CLOSED") & Attr("exit_date").eq(today_iso)
                 ),
@@ -205,7 +205,7 @@ class PaperTradeJournal:
         try:
             mon_iso, sun_iso = self._week_bounds()
             return self._query_all(
-                KeyConditionExpression=Key("PK").eq(_PK),
+                KeyConditionExpression=Key("pk").eq(_PK),
                 FilterExpression=(
                     Attr("status").eq("CLOSED")
                     & Attr("exit_date").between(mon_iso, sun_iso)

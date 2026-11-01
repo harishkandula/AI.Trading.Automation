@@ -2,10 +2,10 @@
 
 For each open paper trade:
   1. Fetch today's candle from the provider (S3 only — fill_gaps=False).
-  2. If today's low  <= stop_price   → close at stop_price,  reason="stop_hit"
-  3. If today's high >= target_price → close at target_price, reason="target_hit"
-  4. If (today - entry_date).days >= holding_period_sessions
-                                   → close at today's close, reason="time_exit"
+  2. If today's low  <= stop_price   -> close at stop_price,  reason="stop_hit"
+  3. If today's high >= target_price -> close at target_price, reason="target_hit"
+  4. If sessions held >= holding_period_sessions
+                                    -> close at today's close, reason="time_exit"
 
 Multiple conditions may apply in theory (gap-through); stop takes priority over
 target (conservatism), then time_exit.
@@ -13,7 +13,7 @@ target (conservatism), then time_exit.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -47,11 +47,12 @@ def monitor_open_trades(
     Returns
     -------
     dict with keys:
-        open_count    – open trades remaining after this run
-        closed_today  – number of trades closed in this run
-        pnl_today     – cumulative realised P&L for all trades closed today
+        open_count    - open trades remaining after this run
+        closed_today  - number of trades closed in this run
+        pnl_today     - cumulative realised P&L for all trades closed today
     """
     from app.models.candle import Timeframe
+    from app.core.time_utils import trading_days_between
 
     open_trades = journal.get_open_trades()
     if not open_trades:
@@ -60,12 +61,10 @@ def monitor_open_trades(
     closed_this_run: list[dict] = []
 
     for trade in open_trades:
-        trade_id: str = trade["SK"]
+        trade_id: str = trade["sk"]
         symbol: str = trade["symbol"]
 
         try:
-            # Fetch today's single candle (start=today, end=today is acceptable
-            # for the provider — it will return 0 or 1 candles).
             candles = provider.get_historical_candles(
                 symbol, Timeframe.D1, today, today
             )
@@ -76,7 +75,6 @@ def monitor_open_trades(
                 )
                 continue
 
-            # Use the last (most recent) candle for the requested date
             candle = candles[-1]
 
             stop_price: float | None = trade.get("stop_price")
@@ -86,13 +84,13 @@ def monitor_open_trades(
                 trade.get("holding_period_sessions") or _DEFAULT_HOLDING_SESSIONS
             )
 
-            # Compute age in calendar days (conservative; sessions would be better
-            # but requires a trading-calendar call for each trade).
-            from datetime import date as _date
-            entry_date = _date.fromisoformat(entry_date_iso)
-            age_days = (today - entry_date).days
+            entry_date = date.fromisoformat(entry_date_iso)
+            # Count trading sessions elapsed since entry (entry day not counted,
+            # today is counted — consistent with "sessions held after entry")
+            sessions_held = len(trading_days_between(
+                entry_date + timedelta(days=1), today
+            ))
 
-            # Determine exit condition — stop takes priority over target
             exit_price: float | None = None
             exit_reason: str | None = None
 
@@ -102,7 +100,7 @@ def monitor_open_trades(
             elif target_price is not None and candle.high >= target_price:
                 exit_price = target_price
                 exit_reason = "target_hit"
-            elif age_days >= holding_max:
+            elif sessions_held >= holding_max:
                 exit_price = candle.close
                 exit_reason = "time_exit"
 
@@ -125,7 +123,6 @@ def monitor_open_trades(
                 "Error monitoring paper trade %s (%s)", trade_id, symbol, exc_info=True
             )
 
-    # Refresh open count from journal after closures
     remaining_open = len(journal.get_open_trades())
     pnl_today = journal.get_pnl_today()
 
