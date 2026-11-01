@@ -39,13 +39,13 @@ def _check_data_freshness(today) -> str | None:
 
 
 def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
-    """AWS Lambda entry-point for the evening scan (19:00 IST Mon-Fri).
+    """
+    AWS Lambda entry-point for the evening scan (19:00 IST Mon-Fri).
 
     All heavy imports are deferred inside this function so they execute during
-    the INVOKE phase, not INIT. Lambda's INIT phase has a hard 10 s limit; pandas
-    + numpy + yfinance together take ~9 s to import on a cold container.
+    the INVOKE phase, not INIT. Lambda's INIT phase has a hard 10 s limit;
+    pandas + numpy + yfinance together take ~9 s to import on a cold container.
     """
-    # --- deferred imports (keep INIT phase < 1 s) ---
     from app.brokers.groww_broker import GrowwBroker  # noqa: PLC0415
     from app.data.providers.hybrid_provider import HybridDataProvider  # noqa: PLC0415
     from app.data.universe import get_universe  # noqa: PLC0415
@@ -63,7 +63,8 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     from app.research.scoring import StrategyFamily, score_signal  # noqa: PLC0415
     from app.research.regime import MarketRegime, compute_regime  # noqa: PLC0415
     from app.research.rs_compute import compute_rs_percentiles, compute_sector_ranks  # noqa: PLC0415
-    from app.data.nifty500_symbols import SYMBOL_TO_SECTOR  # noqa: PLC0415
+    from app.risk.engine import RiskConfig, RiskGuard, PortfolioSnapshot, build_portfolio_snapshot  # noqa: PLC0415
+    from app.data.nifty500_symbols import SYMBOL_TO_SECTOR, SYMBOL_TO_SEGMENT  # noqa: PLC0415
 
     if isinstance(event, dict) and event.get("_prewarm"):
         log.info("Pre-warm ping received — container ready")
@@ -83,13 +84,12 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     start = today - timedelta(days=_WARMUP_DAYS)
 
     import os  # noqa: PLC0415
-    # fill_gaps=False: reads S3 only — data pipeline already ran before market close.
     provider = HybridDataProvider(fill_gaps=False)
     universe_name = os.environ.get("UNIVERSE", "nifty500")
     symbols = get_universe(universe_name)
     strategies = all_strategies()
 
-    # ── Compute market regime (best-effort) ──────────────────────────────────
+    # ── Compute market regime (best-effort) ────────────────────────────────────────
     regime = MarketRegime.UNKNOWN
     try:
         regime_snapshot = compute_regime(
@@ -108,7 +108,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     except Exception:
         log.warning("Regime computation failed — falling back to UNKNOWN", exc_info=True)
 
-    # ── Compute RS percentiles across the full universe (best-effort) ────────
+    # ── Compute RS percentiles across the full universe (best-effort) ────────────
     rs_percentiles: dict[str, float] = {}
     sector_ranks: dict[str, int] = {}
     try:
@@ -164,7 +164,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             log.warning("Failed to process %s", symbol, exc_info=True)
             errors += 1
 
-    # Score and rank signals (best-effort — missing RS data gets neutral score)
+    # Score and rank signals
     _FAMILY_MAP = {
         "s00_benchmark": StrategyFamily.MOMENTUM,
         "s01_rs_momentum": StrategyFamily.MOMENTUM,
@@ -175,7 +175,6 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         "morning_star": StrategyFamily.PULLBACK,
         "intraday_support_supertrend": StrategyFamily.MOMENTUM,
     }
-    # Detect multi-family confluence per symbol
     families_by_symbol: dict[str, list[str]] = {}
     for sig in all_signals:
         fam = _FAMILY_MAP.get(sig.strategy_id, StrategyFamily.MOMENTUM).value
@@ -208,7 +207,6 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             log.debug("Scoring failed for %s", sig.symbol, exc_info=True)
         scored_signals.append(sig)
 
-    # Sort by score descending
     scored_signals.sort(key=lambda s: s.indicators.get("score", 0), reverse=True)
     all_signals = scored_signals
 
@@ -227,30 +225,66 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     from app.paper_trading.monitor import monitor_open_trades  # noqa: PLC0415
 
     monitor_result: dict = {}
+    journal = PaperTradeJournal()
     try:
-        journal = PaperTradeJournal()
         monitor_result = monitor_open_trades(journal, provider, today)
         log.info("Paper trade monitor: %s", monitor_result)
     except Exception:
         log.warning("Paper trade monitor failed (non-fatal)", exc_info=True)
+
+    # --- Apply risk guard with real open positions ---
+    # Re-read open trades after monitor has closed any exits
+    from app.core.ssm_config import get_portfolio_equity, get_risk_config_from_ssm  # noqa: PLC0415
+    portfolio_equity = get_portfolio_equity()
+    open_trades_list = []
+    pnl_today = 0.0
+    pnl_week = 0.0
+    try:
+        open_trades_list = journal.get_open_trades()
+        pnl_today = journal.get_pnl_today()
+        pnl_week = journal.get_pnl_week()
+    except Exception:
+        log.warning("Could not load open trades for risk guard", exc_info=True)
+
+    portfolio = build_portfolio_snapshot(
+        open_trades=open_trades_list,
+        symbol_to_sector=SYMBOL_TO_SECTOR,
+        symbol_to_segment=SYMBOL_TO_SEGMENT,
+        current_prices={},
+        equity=portfolio_equity,
+        realised_pnl_today=pnl_today,
+        realised_pnl_this_week=pnl_week,
+    )
+    ssm_overrides = get_risk_config_from_ssm()
+    risk_cfg = RiskConfig(**ssm_overrides) if ssm_overrides else RiskConfig()
+    guard = RiskGuard(risk_cfg, portfolio)
+    approved_signals = []
+    for sig in all_signals:
+        sector = SYMBOL_TO_SECTOR.get(sig.symbol, "UNKNOWN")
+        segment = SYMBOL_TO_SEGMENT.get(sig.symbol, "UNKNOWN")
+        decision = guard.check(sig, sector=sector, segment=segment, as_of=today)
+        if decision.approved:
+            approved_signals.append(sig)
+        else:
+            log.info("Risk rejected %s: %s", sig.symbol, decision.reason)
+    all_signals = approved_signals
 
     try:
         notifier = Notifier.from_secrets()
         if all_signals:
             notifier.send_signal_alert(all_signals)
 
-        # Build paper trade summary line for Telegram (only when non-zero activity)
         paper_summary = ""
         if monitor_result:
             closed_today = monitor_result.get("closed_today", 0)
-            pnl_today = monitor_result.get("pnl_today", 0.0)
+            pnl_val = monitor_result.get("pnl_today", 0.0)
             open_count = monitor_result.get("open_count", 0)
             if closed_today or open_count:
-                sign = "+" if pnl_today >= 0 else ""
+                sign = "+" if pnl_val >= 0 else ""
                 paper_summary = (
                     f"\n\n<b>Paper Trades</b>\n"
                     f"  Open: {open_count}  |  Closed today: {closed_today}"
-                    f"  |  P&amp;L today: {sign}{pnl_today:,.2f}"
+                    f"  |  P&amp;L today: {sign}{pnl_val:,.2f}"
                 )
 
         notifier.send_daily_summary(
