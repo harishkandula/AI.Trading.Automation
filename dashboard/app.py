@@ -9,9 +9,9 @@ Reads live data from AWS (DynamoDB + S3) and renders five pages:
 
 Required environment variables
 --------------------------------
-DATA_BUCKET       – S3 bucket containing backtest results and signals
-STATE_TABLE       – DynamoDB table used for paper trades / signals / regime
-LEADERBOARD_TABLE – DynamoDB table for strategy leaderboard
+DATA_BUCKET       - S3 bucket containing backtest results and signals
+STATE_TABLE       - DynamoDB table used for paper trades / signals / regime
+LEADERBOARD_TABLE - DynamoDB table for strategy leaderboard
 
 AWS credentials are resolved via the standard boto3 chain
 (AWS_PROFILE, AWS_ACCESS_KEY_ID/SECRET, IAM role, etc.).
@@ -37,7 +37,7 @@ import pandas as pd
 import streamlit as st
 
 # ---------------------------------------------------------------------------
-# Page config — must be the first Streamlit call
+# Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Market AI Dashboard",
@@ -67,7 +67,7 @@ def _s3_client():
 
 
 def _from_dynamo(value: Any) -> Any:
-    """Recursively convert Decimal → float for pandas compatibility."""
+    """Recursively convert Decimal -> float for pandas compatibility."""
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, dict):
@@ -98,6 +98,27 @@ def _scan_table(table_name: str, filter_expression=None, **kwargs) -> list[dict]
         return []
 
 
+def _query_pk(table_name: str, pk: str) -> list[dict]:
+    """Query all items for a single partition key. Returns [] on any error."""
+    if not table_name:
+        return []
+    try:
+        from boto3.dynamodb.conditions import Key  # noqa: PLC0415
+        table = _dynamo_resource().Table(table_name)
+        resp = table.query(KeyConditionExpression=Key("pk").eq(pk))
+        items = [_from_dynamo(i) for i in resp.get("Items", [])]
+        while "LastEvaluatedKey" in resp:
+            resp = table.query(
+                KeyConditionExpression=Key("pk").eq(pk),
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            items.extend(_from_dynamo(i) for i in resp.get("Items", []))
+        return items
+    except Exception as exc:
+        st.warning(f"DynamoDB query failed ({table_name}, pk={pk}): {exc}")
+        return []
+
+
 def _get_item(table_name: str, pk: str, sk: str) -> dict:
     """Single DynamoDB GetItem. Returns {} on any error."""
     if not table_name:
@@ -112,45 +133,26 @@ def _get_item(table_name: str, pk: str, sk: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Cached data loaders (TTL = 5 min to avoid hammering AWS on every rerun)
+# Cached data loaders (TTL = 5 min)
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=300, show_spinner="Loading paper trades…")
 def load_paper_trades() -> list[dict]:
-    """Load all items from STATE_TABLE where pk starts with PAPER_TRADE."""
-    if not _STATE_TABLE:
-        return []
-    try:
-        from boto3.dynamodb.conditions import Attr  # noqa: PLC0415
-        return _scan_table(_STATE_TABLE, filter_expression=Attr("pk").begins_with("PAPER_TRADE"))
-    except Exception as exc:
-        st.warning(f"Could not load paper trades: {exc}")
-        return []
+    """Load all paper trade items (pk=PAPER_TRADE) from STATE_TABLE."""
+    return _query_pk(_STATE_TABLE, "PAPER_TRADE")
 
 
 @st.cache_data(ttl=300, show_spinner="Loading signals…")
 def load_signals(days: int = 7) -> list[dict]:
-    """Load recent signals from STATE_TABLE (pk == SIGNAL or pk begins with SIGNAL)."""
+    """Load signals written by morning handler (pk=SIGNAL_{date}) for the last N days."""
     if not _STATE_TABLE:
         return []
-    try:
-        from boto3.dynamodb.conditions import Attr  # noqa: PLC0415
-        cutoff = (date.today() - timedelta(days=days)).isoformat()
-        items = _scan_table(
-            _STATE_TABLE,
-            filter_expression=(
-                Attr("pk").begins_with("SIGNAL")
-                & Attr("signal_date").gte(cutoff)
-            ),
-        )
-        # Fallback: if no SIGNAL items, show recent paper trades as proxy
-        if not items:
-            trades = load_paper_trades()
-            items = [t for t in trades if t.get("entry_date", "") >= cutoff]
-        return items
-    except Exception as exc:
-        st.warning(f"Could not load signals: {exc}")
-        return []
+    items: list[dict] = []
+    today = date.today()
+    for i in range(days):
+        d = today - timedelta(days=i)
+        items.extend(_query_pk(_STATE_TABLE, f"SIGNAL_{d.isoformat()}"))
+    return items
 
 
 @st.cache_data(ttl=300, show_spinner="Loading leaderboard…")
@@ -192,7 +194,6 @@ def load_latest_backtest() -> dict:
                     all_keys.append(key)
         if not all_keys:
             return {}
-        # Pick the key that sorts last (date-prefixed keys → latest = last)
         latest_key = sorted(all_keys)[-1]
         resp = s3.get_object(Bucket=_DATA_BUCKET, Key=latest_key)
         data = json.loads(resp["Body"].read())
@@ -236,25 +237,24 @@ if st.sidebar.button("Refresh data"):
 
 def page_live_signals() -> None:
     st.title("Live Signals")
-    st.caption("Today's signals from DynamoDB (falls back to recent paper trades)")
+    st.caption("Approved signals from the last 7 days (written by morning handler)")
 
     items = load_signals(days=7)
 
     if not items:
-        st.info("No signals found. Check that STATE_TABLE is set and contains SIGNAL items.")
+        st.info("No signals found. Check that STATE_TABLE is set and the morning Lambda has run.")
         return
 
     rows = []
     for item in items:
         rows.append({
-            "Symbol": item.get("symbol") or item.get("sk", ""),
+            "Symbol": item.get("symbol", ""),
             "Strategy": item.get("strategy_id", ""),
-            "Score": item.get("score") or item.get("composite_score", ""),
-            "Entry Price": item.get("entry_price") or item.get("planned_entry_price", ""),
+            "Score": item.get("score", ""),
+            "Entry Price": item.get("entry_price", ""),
             "Stop": item.get("stop_price", ""),
-            "Target": (item.get("target_prices") or [""])[0] if isinstance(item.get("target_prices"), list) else item.get("target_price", ""),
             "Status": item.get("status", ""),
-            "Date": item.get("signal_date") or item.get("entry_date", ""),
+            "Date": item.get("signal_date", ""),
         })
 
     df = pd.DataFrame(rows)
@@ -281,9 +281,8 @@ def page_paper_trading() -> None:
         )
         return
 
-    # Normalise numeric fields
     for t in trades:
-        for field in ("realized_pnl", "pnl", "entry_price", "exit_price"):
+        for field in ("pnl", "entry_price", "exit_price"):
             val = t.get(field)
             if val is not None:
                 try:
@@ -291,26 +290,22 @@ def page_paper_trading() -> None:
                 except (TypeError, ValueError):
                     pass
 
-    closed_statuses = {"CLOSED_TARGET", "CLOSED_STOP", "CLOSED_TIME", "CLOSED_EOD"}
-    open_statuses = {"OPEN", "PARTIALLY_CLOSED", "PENDING_ENTRY"}
+    # journal writes status = "OPEN" or "CLOSED"
+    closed = [t for t in trades if t.get("status") == "CLOSED"]
+    open_trades = [t for t in trades if t.get("status") == "OPEN"]
 
-    closed = [t for t in trades if t.get("status", "") in closed_statuses]
-    open_trades = [t for t in trades if t.get("status", "") in open_statuses]
-
-    total_pnl = sum(float(t.get("realized_pnl") or t.get("pnl") or 0) for t in closed)
-    wins = [t for t in closed if float(t.get("realized_pnl") or t.get("pnl") or 0) > 0]
+    total_pnl = sum(float(t.get("pnl") or 0) for t in closed)
+    wins = [t for t in closed if float(t.get("pnl") or 0) > 0]
     win_rate = (len(wins) / len(closed) * 100) if closed else 0.0
 
-    # Summary cards
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total P&L (closed)", f"₹{total_pnl:,.0f}", delta=None)
+    col1.metric("Total P&L (closed)", f"₹{total_pnl:,.0f}")
     col2.metric("Win Rate", f"{win_rate:.1f}%")
     col3.metric("Open Positions", len(open_trades))
     col4.metric("Closed Trades", len(closed))
 
     st.markdown("---")
 
-    # Full trades table
     st.subheader("All Paper Trades")
     rows = []
     for t in trades:
@@ -320,23 +315,23 @@ def page_paper_trading() -> None:
             "Status": t.get("status", ""),
             "Entry Price": t.get("entry_price", ""),
             "Exit Price": t.get("exit_price", ""),
-            "Qty": t.get("entry_quantity") or t.get("quantity", ""),
-            "P&L": t.get("realized_pnl") or t.get("pnl") or "",
-            "Entry Date": t.get("entry_date") or t.get("entry_timestamp", "")[:10] if isinstance(t.get("entry_timestamp"), str) else t.get("entry_date", ""),
-            "Closed Date": t.get("closed_date", ""),
+            "Qty": t.get("qty", ""),
+            "P&L": t.get("pnl", ""),
+            "Entry Date": t.get("entry_date", ""),
+            "Exit Date": t.get("exit_date", ""),
+            "Exit Reason": t.get("exit_reason", ""),
         })
     df = pd.DataFrame(rows)
     if "Entry Date" in df.columns:
         df = df.sort_values("Entry Date", ascending=False)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # Cumulative P&L chart
     st.subheader("Cumulative P&L")
     if closed:
         pnl_rows = []
         for t in closed:
-            d = t.get("closed_date", "") or ""
-            pnl = float(t.get("realized_pnl") or t.get("pnl") or 0)
+            d = t.get("exit_date", "") or ""
+            pnl = float(t.get("pnl") or 0)
             if d:
                 pnl_rows.append({"date": d, "pnl": pnl})
 
@@ -346,7 +341,7 @@ def page_paper_trading() -> None:
             pnl_df = pnl_df.set_index("date")
             st.line_chart(pnl_df["cumulative_pnl"])
         else:
-            st.info("No closed-date data available to plot cumulative P&L.")
+            st.info("No exit-date data available to plot cumulative P&L.")
     else:
         st.info("No closed trades yet.")
 
@@ -384,7 +379,6 @@ def page_leaderboard() -> None:
 
     df = pd.DataFrame(rows)
 
-    # Bar chart: strategies ranked by avg_sharpe
     st.subheader("Avg Sharpe by Strategy")
     chart_df = df[["Strategy", "Avg Sharpe"]].set_index("Strategy")
     st.bar_chart(chart_df)
@@ -416,7 +410,6 @@ def page_backtest_results() -> None:
     s3_key = data.get("_s3_key", "")
     st.caption(f"Loaded from: `s3://{_DATA_BUCKET}/{s3_key}`")
 
-    # Per-strategy metrics
     st.subheader("Per-Strategy Metrics")
 
     strategies_data = data.get("strategies") or data.get("results") or []
@@ -437,11 +430,9 @@ def page_backtest_results() -> None:
         else:
             st.json(strategies_data)
     elif isinstance(data, dict):
-        # Flat results dict (single strategy or summary)
         display = {k: v for k, v in data.items() if not k.startswith("_")}
         st.json(display)
 
-    # Equity curve
     equity = data.get("equity_curve") or data.get("equity")
     if equity:
         st.subheader("Equity Curve")
@@ -449,10 +440,15 @@ def page_backtest_results() -> None:
             eq_df = pd.DataFrame(equity)
             if "date" in eq_df.columns:
                 eq_df = eq_df.set_index("date")
-            value_col = next((c for c in eq_df.columns if "value" in c.lower() or "equity" in c.lower()), eq_df.columns[0])
+            value_col = next(
+                (c for c in eq_df.columns if "value" in c.lower() or "equity" in c.lower()),
+                eq_df.columns[0],
+            )
             st.line_chart(eq_df[value_col])
         elif isinstance(equity, dict):
-            eq_df = pd.DataFrame(list(equity.items()), columns=["date", "value"]).set_index("date")
+            eq_df = pd.DataFrame(
+                list(equity.items()), columns=["date", "value"]
+            ).set_index("date")
             st.line_chart(eq_df["value"])
 
 
@@ -461,20 +457,30 @@ def page_backtest_results() -> None:
 # ---------------------------------------------------------------------------
 
 _REGIME_DESCRIPTIONS = {
+    "STRONG_BULL": (
+        "Strongest uptrend — index above all EMAs, breadth above 65%, new highs dominant. "
+        "All trend-following and momentum strategies are in their preferred regime. "
+        "Maximum risk/reward for long setups."
+    ),
     "BULL": (
         "Strong uptrend — breadth is expanding and most indices are above their "
         "200-day moving averages. Trend-following and momentum strategies tend to "
         "perform best in this regime. Risk/reward favours long setups."
     ),
-    "BEAR": (
-        "Broad market decline — indices are trading below key moving averages and "
-        "breadth is deteriorating. Most trend strategies reduce exposure or stand "
-        "aside. Focus shifts to capital preservation."
-    ),
     "SIDEWAYS": (
         "Range-bound market — no clear directional bias. Mean-reversion strategies "
         "may outperform. Trend-following strategies generate more whipsaws. "
         "Tight stop-losses and smaller position sizes are prudent."
+    ),
+    "CORRECTION": (
+        "Pullback within an uptrend — index below EMA50 but still above EMA200. "
+        "Breadth is deteriorating. Favour high-quality setups only; "
+        "reduce position size and wait for confirmation of recovery."
+    ),
+    "BEAR": (
+        "Broad market decline — indices are trading below key moving averages and "
+        "breadth is deteriorating. Most trend strategies reduce exposure or stand "
+        "aside. Focus shifts to capital preservation."
     ),
     "RECOVERY": (
         "Market is rebounding from a prior decline but has not yet confirmed a new "
@@ -498,9 +504,11 @@ def page_market_regime() -> None:
     regime = load_regime()
 
     colour = {
+        "STRONG_BULL": "darkgreen",
         "BULL": "green",
         "BEAR": "red",
         "SIDEWAYS": "orange",
+        "CORRECTION": "goldenrod",
         "RECOVERY": "blue",
         "UNKNOWN": "grey",
     }.get(regime, "grey")
