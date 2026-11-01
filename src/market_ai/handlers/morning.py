@@ -74,16 +74,23 @@ def _persist_signals(signals, today) -> None:
         date_str = today.isoformat()
         with table.batch_writer() as batch:
             for sig in signals:
+                entry_ref = sig.entry_reference_price
                 item = {
                     "pk": f"SIGNAL_{date_str}",
                     "sk": f"{sig.symbol}_{sig.strategy_id}",
                     "symbol": sig.symbol,
                     "strategy_id": sig.strategy_id,
                     "signal_date": date_str,
-                    "entry_price": Decimal(str(round(sig.entry_reference_price, 2))) if sig.entry_reference_price else None,
-                    "stop_price": Decimal(str(round(sig.stop_price, 2))) if sig.stop_price else None,
+                    "entry_price": (
+                        Decimal(str(round(entry_ref, 2))) if entry_ref else None
+                    ),
+                    "stop_price": (
+                        Decimal(str(round(sig.stop_price, 2))) if sig.stop_price else None
+                    ),
                     "score": Decimal(str(sig.indicators.get("score", 0))),
-                    "status": sig.status.value if hasattr(sig.status, "value") else str(sig.status),
+                    "status": (
+                        sig.status.value if hasattr(sig.status, "value") else str(sig.status)
+                    ),
                 }
                 # strip None values — DynamoDB rejects them
                 batch.put_item(Item={k: v for k, v in item.items() if v is not None})
@@ -116,8 +123,15 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     from app.strategies.registry import all_strategies  # noqa: PLC0415
     from app.research.scoring import StrategyFamily, score_signal  # noqa: PLC0415
     from app.research.regime import MarketRegime, compute_regime  # noqa: PLC0415
-    from app.research.rs_compute import compute_rs_percentiles, compute_sector_ranks  # noqa: PLC0415
-    from app.risk.engine import RiskConfig, RiskGuard, PortfolioSnapshot, build_portfolio_snapshot  # noqa: PLC0415
+    from app.research.rs_compute import (  # noqa: PLC0415
+        compute_rs_percentiles,
+        compute_sector_ranks,
+    )
+    from app.risk.engine import (  # noqa: PLC0415
+        RiskConfig,
+        RiskGuard,
+        build_portfolio_snapshot,
+    )
     from app.data.nifty500_symbols import SYMBOL_TO_SECTOR, SYMBOL_TO_SEGMENT  # noqa: PLC0415
 
     if isinstance(event, dict) and event.get("_prewarm"):
@@ -143,7 +157,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     symbols = get_universe(universe_name)
     strategies = all_strategies()
 
-    # ── Compute market regime (best-effort) ────────────────────────────────────────
+    # ── Compute market regime (best-effort) ──────────────────────────────────
     regime = MarketRegime.UNKNOWN
     regime_snapshot = None
     try:
@@ -164,7 +178,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     except Exception:
         log.warning("Regime computation failed — falling back to UNKNOWN", exc_info=True)
 
-    # ── Compute RS percentiles across the full universe (best-effort) ────────────
+    # ── Compute RS percentiles across the full universe (best-effort) ────────
     rs_percentiles: dict[str, float] = {}
     sector_ranks: dict[str, int] = {}
     try:
@@ -295,7 +309,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         open_trades=open_trades_list,
         symbol_to_sector=SYMBOL_TO_SECTOR,
         symbol_to_segment=SYMBOL_TO_SEGMENT,
-        current_prices={},  # no live prices; current_value falls back to entry_price * qty
+        current_prices={},
         equity=portfolio_equity,
         realised_pnl_today=pnl_today,
         realised_pnl_this_week=pnl_week,

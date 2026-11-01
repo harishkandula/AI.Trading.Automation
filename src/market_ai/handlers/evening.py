@@ -62,8 +62,15 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     from app.strategies.registry import all_strategies  # noqa: PLC0415
     from app.research.scoring import StrategyFamily, score_signal  # noqa: PLC0415
     from app.research.regime import MarketRegime, compute_regime  # noqa: PLC0415
-    from app.research.rs_compute import compute_rs_percentiles, compute_sector_ranks  # noqa: PLC0415
-    from app.risk.engine import RiskConfig, RiskGuard, PortfolioSnapshot, build_portfolio_snapshot  # noqa: PLC0415
+    from app.research.rs_compute import (  # noqa: PLC0415
+        compute_rs_percentiles,
+        compute_sector_ranks,
+    )
+    from app.risk.engine import (  # noqa: PLC0415
+        RiskConfig,
+        RiskGuard,
+        build_portfolio_snapshot,
+    )
     from app.data.nifty500_symbols import SYMBOL_TO_SECTOR, SYMBOL_TO_SEGMENT  # noqa: PLC0415
 
     if isinstance(event, dict) and event.get("_prewarm"):
@@ -89,7 +96,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     symbols = get_universe(universe_name)
     strategies = all_strategies()
 
-    # ── Compute market regime (best-effort) ────────────────────────────────────────
+    # ── Compute market regime (best-effort) ──────────────────────────────────
     regime = MarketRegime.UNKNOWN
     try:
         regime_snapshot = compute_regime(
@@ -108,7 +115,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     except Exception:
         log.warning("Regime computation failed — falling back to UNKNOWN", exc_info=True)
 
-    # ── Compute RS percentiles across the full universe (best-effort) ────────────
+    # ── Compute RS percentiles across the full universe (best-effort) ────────
     rs_percentiles: dict[str, float] = {}
     sector_ranks: dict[str, int] = {}
     try:
@@ -233,7 +240,6 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
         log.warning("Paper trade monitor failed (non-fatal)", exc_info=True)
 
     # --- Apply risk guard with real open positions ---
-    # Re-read open trades after monitor has closed any exits
     from app.core.ssm_config import get_portfolio_equity, get_risk_config_from_ssm  # noqa: PLC0415
     portfolio_equity = get_portfolio_equity()
     open_trades_list = []
