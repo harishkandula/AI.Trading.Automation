@@ -1,4 +1,4 @@
-"""Market AI - Local Streamlit Dashboard.
+"""Market AI - Streamlit Dashboard.
 
 Reads live data from AWS (DynamoDB + S3) and renders five pages:
   1. Live Signals
@@ -7,28 +7,31 @@ Reads live data from AWS (DynamoDB + S3) and renders five pages:
   4. Backtest Results
   5. Market Regime
 
-Required environment variables
---------------------------------
-DATA_BUCKET       - S3 bucket containing backtest results and signals
-STATE_TABLE       - DynamoDB table used for paper trades / signals / regime
-LEADERBOARD_TABLE - DynamoDB table for strategy leaderboard
+Configuration (Streamlit Cloud: set in App Settings → Secrets)
+----------------------------------------------------------------
+[aws]
+aws_access_key_id     = "AKIA..."
+aws_secret_access_key = "..."
+aws_region            = "ap-south-1"
 
-AWS credentials are resolved via the standard boto3 chain
-(AWS_PROFILE, AWS_ACCESS_KEY_ID/SECRET, IAM role, etc.).
+[app]
+state_table       = "market-ai-dev-state"
+leaderboard_table = "market-ai-dev-leaderboard"
+data_bucket       = "market-ai-dev-data-ap-south-1-386747132117"
 
-Usage
------
-    pip install -r dashboard/requirements.txt
+Local usage (env vars still work as before)
+-------------------------------------------
     export STATE_TABLE=market-ai-dev-state
     export LEADERBOARD_TABLE=market-ai-dev-leaderboard
     export DATA_BUCKET=market-ai-dev-data-ap-south-1-xxxxx
+    export AWS_PROFILE=default   # or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
     streamlit run dashboard/app.py
 """
 from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -37,11 +40,29 @@ import pandas as pd
 import streamlit as st
 
 # ---------------------------------------------------------------------------
+# Config — st.secrets (Streamlit Cloud) with os.environ fallback (local)
+# ---------------------------------------------------------------------------
+
+def _secret(section: str, key: str, env_var: str, default: str = "") -> str:
+    try:
+        return st.secrets[section][key]  # type: ignore[index]
+    except (KeyError, AttributeError, st.errors.StreamlitAPIException):
+        return os.environ.get(env_var, default)
+
+
+_AWS_REGION = _secret("aws", "aws_region", "AWS_DEFAULT_REGION", "ap-south-1")
+_AWS_KEY_ID = _secret("aws", "aws_access_key_id", "AWS_ACCESS_KEY_ID")
+_AWS_SECRET = _secret("aws", "aws_secret_access_key", "AWS_SECRET_ACCESS_KEY")
+_STATE_TABLE = _secret("app", "state_table", "STATE_TABLE")
+_LEADERBOARD_TABLE = _secret("app", "leaderboard_table", "LEADERBOARD_TABLE")
+_DATA_BUCKET = _secret("app", "data_bucket", "DATA_BUCKET")
+
+# ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Market AI Dashboard",
-    page_icon="📈",
+    page_icon="\U0001f4c8",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -50,20 +71,26 @@ st.set_page_config(
 # AWS resource helpers
 # ---------------------------------------------------------------------------
 
-_AWS_REGION = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
-_STATE_TABLE = os.environ.get("STATE_TABLE", "")
-_LEADERBOARD_TABLE = os.environ.get("LEADERBOARD_TABLE", "")
-_DATA_BUCKET = os.environ.get("DATA_BUCKET", "")
+@st.cache_resource(show_spinner=False)
+def _boto3_session() -> boto3.Session:
+    """Build a boto3 session using explicit creds when available (Streamlit Cloud)."""
+    if _AWS_KEY_ID and _AWS_SECRET:
+        return boto3.Session(
+            aws_access_key_id=_AWS_KEY_ID,
+            aws_secret_access_key=_AWS_SECRET,
+            region_name=_AWS_REGION,
+        )
+    return boto3.Session(region_name=_AWS_REGION)
 
 
 @st.cache_resource(show_spinner=False)
 def _dynamo_resource():
-    return boto3.resource("dynamodb", region_name=_AWS_REGION)
+    return _boto3_session().resource("dynamodb")
 
 
 @st.cache_resource(show_spinner=False)
 def _s3_client():
-    return boto3.client("s3", region_name=_AWS_REGION)
+    return _boto3_session().client("s3")
 
 
 def _from_dynamo(value: Any) -> Any:
@@ -78,7 +105,6 @@ def _from_dynamo(value: Any) -> Any:
 
 
 def _scan_table(table_name: str, filter_expression=None, **kwargs) -> list[dict]:
-    """Paginated DynamoDB table scan. Returns [] on any error."""
     if not table_name:
         return []
     try:
@@ -99,7 +125,6 @@ def _scan_table(table_name: str, filter_expression=None, **kwargs) -> list[dict]
 
 
 def _query_pk(table_name: str, pk: str) -> list[dict]:
-    """Query all items for a single partition key. Returns [] on any error."""
     if not table_name:
         return []
     try:
@@ -120,7 +145,6 @@ def _query_pk(table_name: str, pk: str) -> list[dict]:
 
 
 def _get_item(table_name: str, pk: str, sk: str) -> dict:
-    """Single DynamoDB GetItem. Returns {} on any error."""
     if not table_name:
         return {}
     try:
@@ -138,13 +162,11 @@ def _get_item(table_name: str, pk: str, sk: str) -> dict:
 
 @st.cache_data(ttl=300, show_spinner="Loading paper trades…")
 def load_paper_trades() -> list[dict]:
-    """Load all paper trade items (pk=PAPER_TRADE) from STATE_TABLE."""
     return _query_pk(_STATE_TABLE, "PAPER_TRADE")
 
 
 @st.cache_data(ttl=300, show_spinner="Loading signals…")
 def load_signals(days: int = 7) -> list[dict]:
-    """Load signals written by morning handler (pk=SIGNAL_{date}) for the last N days."""
     if not _STATE_TABLE:
         return []
     items: list[dict] = []
@@ -157,7 +179,6 @@ def load_signals(days: int = 7) -> list[dict]:
 
 @st.cache_data(ttl=300, show_spinner="Loading leaderboard…")
 def load_leaderboard() -> list[dict]:
-    """Scan leaderboard table; keep newest run_date per strategy."""
     items = _scan_table(_LEADERBOARD_TABLE)
     if not items:
         return []
@@ -173,14 +194,12 @@ def load_leaderboard() -> list[dict]:
 
 
 @st.cache_data(ttl=300, show_spinner="Loading regime…")
-def load_regime() -> str:
-    item = _get_item(_STATE_TABLE, "REGIME", "current")
-    return str(item.get("regime", "UNKNOWN"))
+def load_regime() -> dict:
+    return _get_item(_STATE_TABLE, "REGIME", "current")
 
 
 @st.cache_data(ttl=300, show_spinner="Loading backtest results from S3…")
 def load_latest_backtest() -> dict:
-    """List backtest/*/results.json in S3 and load the newest one."""
     if not _DATA_BUCKET:
         return {}
     try:
@@ -205,7 +224,7 @@ def load_latest_backtest() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar navigation
+# Sidebar
 # ---------------------------------------------------------------------------
 
 PAGES = [
@@ -290,7 +309,6 @@ def page_paper_trading() -> None:
                 except (TypeError, ValueError):
                     pass
 
-    # journal writes status = "OPEN" or "CLOSED"
     closed = [t for t in trades if t.get("status") == "CLOSED"]
     open_trades = [t for t in trades if t.get("status") == "OPEN"]
 
@@ -305,7 +323,6 @@ def page_paper_trading() -> None:
     col4.metric("Closed Trades", len(closed))
 
     st.markdown("---")
-
     st.subheader("All Paper Trades")
     rows = []
     for t in trades:
@@ -334,7 +351,6 @@ def page_paper_trading() -> None:
             pnl = float(t.get("pnl") or 0)
             if d:
                 pnl_rows.append({"date": d, "pnl": pnl})
-
         if pnl_rows:
             pnl_df = pd.DataFrame(pnl_rows).sort_values("date")
             pnl_df["cumulative_pnl"] = pnl_df["pnl"].cumsum()
@@ -358,7 +374,7 @@ def page_leaderboard() -> None:
     if not entries:
         st.info(
             "No leaderboard data found. "
-            "Check that LEADERBOARD_TABLE is set and the backtest Lambda has run."
+            "Check that LEADERBOARD_TABLE is set and the backtest has run."
         )
         return
 
@@ -395,7 +411,7 @@ def page_backtest_results() -> None:
     st.title("Backtest Results")
 
     if not _DATA_BUCKET:
-        st.warning("DATA_BUCKET environment variable is not set.")
+        st.warning("DATA_BUCKET / app.data_bucket secret is not set.")
         return
 
     data = load_latest_backtest()
@@ -411,7 +427,6 @@ def page_backtest_results() -> None:
     st.caption(f"Loaded from: `s3://{_DATA_BUCKET}/{s3_key}`")
 
     st.subheader("Per-Strategy Metrics")
-
     strategies_data = data.get("strategies") or data.get("results") or []
     if isinstance(strategies_data, list) and strategies_data:
         rows = []
@@ -430,8 +445,7 @@ def page_backtest_results() -> None:
         else:
             st.json(strategies_data)
     elif isinstance(data, dict):
-        display = {k: v for k, v in data.items() if not k.startswith("_")}
-        st.json(display)
+        st.json({k: v for k, v in data.items() if not k.startswith("_")})
 
     equity = data.get("equity_curve") or data.get("equity")
     if equity:
@@ -499,9 +513,10 @@ def page_market_regime() -> None:
     st.title("Market Regime")
 
     if not _STATE_TABLE:
-        st.warning("STATE_TABLE environment variable is not set.")
+        st.warning("STATE_TABLE / app.state_table secret is not set.")
 
-    regime = load_regime()
+    item = load_regime()
+    regime = str(item.get("regime", "UNKNOWN"))
 
     colour = {
         "STRONG_BULL": "darkgreen",
@@ -513,17 +528,19 @@ def page_market_regime() -> None:
         "UNKNOWN": "grey",
     }.get(regime, "grey")
 
-    st.markdown(
-        f"<h2 style='color:{colour};'>{regime}</h2>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<h2 style='color:{colour};'>{regime}</h2>", unsafe_allow_html=True)
+    st.info(_REGIME_DESCRIPTIONS.get(regime, _REGIME_DESCRIPTIONS["UNKNOWN"]))
 
-    description = _REGIME_DESCRIPTIONS.get(regime, _REGIME_DESCRIPTIONS["UNKNOWN"])
-    st.info(description)
+    # Extra detail fields if available
+    if item:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("% above EMA50", f"{float(item.get('pct_above_ema50', 0)):.1f}%")
+        col2.metric("% above EMA200", f"{float(item.get('pct_above_ema200', 0)):.1f}%")
+        col3.metric("New highs %", f"{float(item.get('new_highs_pct', 0)):.1f}%")
+        st.caption(f"As of: {item.get('as_of', 'unknown')}")
 
     st.markdown("---")
     st.subheader("What each regime means for your strategies")
-
     for r, desc in _REGIME_DESCRIPTIONS.items():
         if r == "UNKNOWN":
             continue
