@@ -1,9 +1,12 @@
-"""Weekly Lambda handler — price-based compounder research scan.
+"""Weekly Lambda handler — compounder research scan + performance report.
 
-Scores NIFTY 500 stocks using price/volume data already in S3 as a proxy
-for compounder quality until a proper fundamentals API is integrated.
+Runs every Sunday at 10:00 IST (cron(30 4 ? * SUN *)).
 
-Scoring factors (all derived from S3 Parquet candles):
+Two notifications are sent:
+  1. Compounder research scan  → main Telegram channel (chat_id)
+  2. Weekly performance report → weekly Telegram channel (weekly_chat_id)
+
+Scoring factors for the compounder scan (all derived from S3 Parquet candles):
   - 52-week momentum     : close vs 52-week high (higher = stronger trend)
   - Long-term trend      : close vs 200-day EMA (above = uptrend)
   - Trend consistency    : % of last 52 weeks that closed above 200d EMA
@@ -38,6 +41,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     try:
         candidates = _scan(today)
         _notify(today, candidates)
+        _notify_weekly_report(today)
         return {
             "statusCode": 200,
             "body": {
@@ -208,6 +212,38 @@ def _notify(today: date, candidates: list[dict[str, Any]]) -> None:
         log.warning("Weekly Telegram notification failed", exc_info=True)
 
 
+def _notify_weekly_report(today: date) -> None:
+    """Send weekly performance report to the dedicated weekly Telegram channel."""
+    try:
+        from collections import Counter  # noqa: PLC0415
+        from app.notifications.notifier import Notifier  # noqa: PLC0415
+
+        notifier = Notifier.from_secrets()
+
+        closed_trades = _fetch_closed_paper_trades_this_week(today)
+        open_trades = _fetch_open_trades_with_cmp(today)
+        signals_this_week = _fetch_signals_this_week(today)
+        regime = _fetch_current_regime()
+
+        signals_by_strategy: dict[str, int] = dict(
+            Counter(s.get("strategy_id", "unknown") for s in signals_this_week)
+        )
+
+        notifier.send_weekly_report(
+            week_end=today,
+            closed_trades=closed_trades,
+            open_trades=open_trades,
+            signals_by_strategy=signals_by_strategy,
+            regime=regime,
+        )
+        log.info(
+            "Weekly report sent: %d closed trades, %d open positions, %d signals",
+            len(closed_trades), len(open_trades), len(signals_this_week),
+        )
+    except Exception:
+        log.warning("_notify_weekly_report failed", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # AI summary helpers
 # ---------------------------------------------------------------------------
@@ -284,7 +320,6 @@ def _fetch_closed_paper_trades_this_week(today: date) -> list[dict[str, Any]]:
         dynamodb = boto3.resource("dynamodb", region_name=_region)
         table = dynamodb.Table(table_name)
 
-        # journal writes pk=PAPER_TRADE, status=CLOSED, exit_date=ISO
         resp = table.query(
             KeyConditionExpression=Key("pk").eq("PAPER_TRADE"),
             FilterExpression=(
@@ -308,6 +343,66 @@ def _fetch_closed_paper_trades_this_week(today: date) -> list[dict[str, Any]]:
         return items
     except Exception:
         log.warning("Could not fetch closed paper trades", exc_info=True)
+        return []
+
+
+def _fetch_open_trades_with_cmp(today: date) -> list[dict[str, Any]]:
+    """Fetch open paper trades from DynamoDB and augment with last close from S3."""
+    try:
+        import boto3  # noqa: PLC0415
+        from boto3.dynamodb.conditions import Key, Attr  # noqa: PLC0415
+        from decimal import Decimal  # noqa: PLC0415
+        from app.data.store import ParquetStore  # noqa: PLC0415
+
+        table_name = os.environ.get("STATE_TABLE", "")
+        if not table_name:
+            return []
+
+        _region = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
+        dynamodb = boto3.resource("dynamodb", region_name=_region)
+        table = dynamodb.Table(table_name)
+
+        resp = table.query(
+            KeyConditionExpression=Key("pk").eq("PAPER_TRADE"),
+            FilterExpression=Attr("status").eq("OPEN"),
+        )
+        items: list[dict[str, Any]] = resp.get("Items", [])
+        while "LastEvaluatedKey" in resp:
+            resp = table.query(
+                KeyConditionExpression=Key("pk").eq("PAPER_TRADE"),
+                FilterExpression=Attr("status").eq("OPEN"),
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            items.extend(resp.get("Items", []))
+
+        def _norm(v: Any) -> Any:
+            return float(v) if isinstance(v, Decimal) else v
+
+        trades = [{k: _norm(v) for k, v in item.items()} for item in items]
+
+        # Augment each trade with the latest close from S3 (Friday's close by Sunday)
+        bucket = os.environ.get("DATA_BUCKET", "")
+        if bucket and trades:
+            store = ParquetStore(bucket)
+            lookback = today - timedelta(days=7)
+            for trade in trades:
+                try:
+                    df = store.read_ohlcv_range(trade["symbol"], lookback, today)
+                    if not df.empty:
+                        trade["cmp"] = float(
+                            df.sort_values("date").iloc[-1]["close"]
+                        )
+                except Exception:
+                    log.debug(
+                        "Could not fetch last close for %s",
+                        trade.get("symbol"),
+                        exc_info=True,
+                    )
+
+        log.info("Fetched %d open paper trades", len(trades))
+        return trades
+    except Exception:
+        log.warning("Could not fetch open paper trades with CMP", exc_info=True)
         return []
 
 

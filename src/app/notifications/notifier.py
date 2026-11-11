@@ -14,6 +14,7 @@ from app.notifications.templates import (
     format_error_alert,
     format_pipeline_health,
     format_signal_alert,
+    format_weekly_report,
 )
 
 log = logging.getLogger(__name__)
@@ -24,9 +25,16 @@ _MAX_SIGNALS_PER_MESSAGE = 10
 class Notifier:
     """High-level notification service backed by Telegram."""
 
-    def __init__(self, bot_token: str, chat_id: str) -> None:
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        weekly_chat_id: str | None = None,
+    ) -> None:
         self._bot_token = bot_token
         self._chat_id = chat_id
+        # Falls back to the main channel when weekly_chat_id is not configured.
+        self._weekly_chat_id = weekly_chat_id or chat_id
 
     # ------------------------------------------------------------------
     # Public API
@@ -80,6 +88,20 @@ class Notifier:
         text = format_pipeline_health(run_date, rows, symbols, adjusted)
         return telegram.send(self._bot_token, self._chat_id, text)
 
+    def send_weekly_report(
+        self,
+        week_end: date,
+        closed_trades: list,
+        open_trades: list,
+        signals_by_strategy: dict,
+        regime: str = "UNKNOWN",
+    ) -> bool:
+        """Send weekly performance report to the dedicated weekly channel."""
+        text = format_weekly_report(
+            week_end, closed_trades, open_trades, signals_by_strategy, regime
+        )
+        return telegram.send(self._bot_token, self._weekly_chat_id, text)
+
     def send_error_alert(self, context: str, error: str) -> bool:
         """Send an error notification."""
         text = format_error_alert(context, error)
@@ -102,6 +124,7 @@ class Notifier:
         return cls(
             bot_token=secret["bot_token"],
             chat_id=secret["chat_id"],
+            weekly_chat_id=secret.get("weekly_chat_id"),
         )
 
 

@@ -1,6 +1,7 @@
 """Report templates for Telegram and email."""
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
 from typing import Any
 
@@ -183,3 +184,126 @@ def format_pipeline_health(
         f"{adj_line}"
         f"S3 is fresh — morning scan ready."
     )
+
+
+# ---------------------------------------------------------------------------
+# Weekly performance report
+# ---------------------------------------------------------------------------
+
+def _r_mult(entry: float, exit_: float, stop: float) -> float | None:
+    """R-multiple for a closed trade. Returns None when stop is missing or invalid."""
+    if not stop or stop >= entry or entry <= 0:
+        return None
+    return round((exit_ - entry) / (entry - stop), 2)
+
+
+def format_weekly_report(
+    week_end: date,
+    closed_trades: list[dict],
+    open_trades: list[dict],
+    signals_by_strategy: dict[str, int],
+    regime: str = "UNKNOWN",
+) -> str:
+    """Weekly performance summary for the dedicated weekly Telegram channel."""
+    total_signals = sum(signals_by_strategy.values())
+    lines: list[str] = [
+        "<b>Market AI — Weekly Performance Report</b>",
+        f"Week ending {week_end}  |  Regime: {regime}",
+        "",
+    ]
+
+    # ── Closed trades ──────────────────────────────────────────────────────
+    if not closed_trades:
+        lines += [
+            "Quiet week — no paper trades closed.",
+            f"Signals fired this week: {total_signals}",
+            "",
+        ]
+    else:
+        agg: dict[str, dict] = defaultdict(
+            lambda: {"cls": 0, "wins": 0, "r_sum": 0.0, "r_n": 0}
+        )
+        best_r: float | None = None
+        best_label = ""
+        worst_r: float | None = None
+        worst_label = ""
+
+        for t in closed_trades:
+            sid = t.get("strategy_id") or "unknown"
+            a = agg[sid]
+            a["cls"] += 1
+            entry = float(t.get("entry_price") or 0)
+            exit_ = float(t.get("exit_price") or 0)
+            stop = float(t.get("stop_price") or 0)
+            r = _r_mult(entry, exit_, stop)
+            sym = (t.get("symbol") or "?").replace(".NS", "")
+            if r is not None:
+                if r > 0:
+                    a["wins"] += 1
+                a["r_sum"] += r
+                a["r_n"] += 1
+                label = f"{sym} ({sid})"
+                if best_r is None or r > best_r:
+                    best_r, best_label = r, label
+                if worst_r is None or r < worst_r:
+                    worst_r, worst_label = r, label
+            elif exit_ > entry:
+                a["wins"] += 1
+
+        col_w = 24
+        sep = "─" * (col_w + 17)
+        lines.append("<b>Closed Trades This Week</b>")
+        lines.append("<pre>")
+        lines.append(f"{'Strategy':<{col_w}} {'Cls':>3} {'Win%':>5} {'AvgR':>6}")
+        lines.append(sep)
+
+        all_sids = sorted(set(list(signals_by_strategy) + list(agg)))
+        tot_cls = tot_wins = tot_r_n = 0
+        tot_r_sum = 0.0
+        for sid in all_sids:
+            a = agg.get(sid, {})
+            n = a.get("cls", 0)
+            w = a.get("wins", 0)
+            rs = a.get("r_sum", 0.0)
+            rn = a.get("r_n", 0)
+            wp = f"{w/n*100:.0f}%" if n else "—"
+            ar = f"{rs/rn:+.1f}R" if rn else "—"
+            lines.append(f"{sid[:col_w]:<{col_w}} {n:>3} {wp:>5} {ar:>6}")
+            tot_cls += n
+            tot_wins += w
+            tot_r_sum += rs
+            tot_r_n += rn
+
+        lines.append(sep)
+        twp = f"{tot_wins/tot_cls*100:.0f}%" if tot_cls else "—"
+        tar = f"{tot_r_sum/tot_r_n:+.1f}R" if tot_r_n else "—"
+        lines.append(f"{'Total':<{col_w}} {tot_cls:>3} {twp:>5} {tar:>6}")
+        lines.append("</pre>")
+
+        if best_r is not None:
+            lines.append(f"Best:  {best_label}  {best_r:+.1f}R")
+        if worst_r is not None:
+            lines.append(f"Worst: {worst_label}  {worst_r:+.1f}R")
+        lines.append(f"Signals fired this week: {total_signals}")
+        lines.append("")
+
+    # ── Open positions ────────────────────────────────────────────────
+    if open_trades:
+        lines.append(f"<b>Open Positions ({len(open_trades)})</b>")
+        for t in open_trades:
+            sym = (t.get("symbol") or "?").replace(".NS", "")
+            sid = t.get("strategy_id") or "?"
+            entry = float(t.get("entry_price") or 0)
+            cmp = t.get("cmp")
+            entry_date = t.get("entry_date", "")
+            if cmp and entry:
+                pct = (cmp - entry) / entry * 100
+                price_info = f"entry {entry:.2f} | last {cmp:.2f} | {pct:+.1f}%"
+            else:
+                price_info = f"entry {entry:.2f}"
+            lines.append(f"• <b>{sym}</b> ({sid}): {price_info} [{entry_date}]")
+    else:
+        lines.append("<b>Open Positions</b>: None")
+
+    lines += ["", "Research only. Not investment advice."]
+    return "\n".join(lines)
