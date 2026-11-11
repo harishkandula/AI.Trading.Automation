@@ -9,13 +9,11 @@ Event payload: {} (no parameters needed — always uses latest from DynamoDB)
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.backtesting.leaderboard import rank_leaderboard, read_latest_per_strategy
-from app.notifications import telegram as _telegram
 from app.notifications.notifier import Notifier
 
 log = logging.getLogger(__name__)
@@ -43,12 +41,12 @@ def _run(today: str) -> dict:
 
     if not entries:
         log.warning("No leaderboard entries found in DynamoDB")
-        _send_telegram(f"<b>Market AI Leaderboard — {today}</b>\n\nNo results yet.")
+        _send_to_weekly_channel(f"<b>Market AI Leaderboard — {today}</b>\n\nNo results yet.")
         return {"statusCode": 200, "body": {"run_date": today, "strategies": 0}}
 
     ranked = rank_leaderboard(entries)
     msg = _format_leaderboard(today, ranked)
-    _send_telegram(msg)
+    _send_to_weekly_channel(msg)
 
     log.info("Leaderboard sent: %d strategies ranked", len(ranked))
     return {
@@ -113,11 +111,7 @@ def _format_leaderboard(run_date: str, ranked: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _send_telegram(message: str) -> None:
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    if bot_token and chat_id:
-        _telegram.send(bot_token, chat_id, message)
-        return
+def _send_to_weekly_channel(message: str) -> None:
     notifier = Notifier.from_secrets()
-    notifier.send_error_alert("leaderboard_summary", message)
+    from app.notifications import telegram as _telegram  # noqa: PLC0415
+    _telegram.send(notifier._bot_token, notifier._weekly_chat_id, message)  # noqa: SLF001
