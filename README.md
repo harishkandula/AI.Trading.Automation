@@ -1,6 +1,6 @@
 # Market AI — Indian Equity Trading Automation
 
-Automated research platform for Indian equities. Scans the NIFTY 500 universe (513 symbols) against eight technical strategies, generates research signals with risk scoring, and delivers results to Telegram. **No live orders are placed.** The order-placement gate (`ENABLE_LIVE_ORDERS`) is hardcoded `"false"` in Terraform.
+Automated research platform for Indian equities. Scans the NIFTY 500 universe (513 symbols) against eight technical strategies, generates research signals with risk scoring, and delivers results to Telegram. **No live orders are placed by default.** All four order-placement guards are hardcoded `"false"` / `"mock"` in Terraform — see [Section 21](#21-enabling-live-order-placement) to enable live trading.
 
 **Stack:** Python 3.12, AWS Lambda + ECS Fargate (container image), Terraform >= 1.6, GitHub Actions.
 
@@ -28,6 +28,8 @@ Automated research platform for Indian equities. Scans the NIFTY 500 universe (5
 18. [Symbol Universe](#18-symbol-universe)
 19. [Key Constraints and Gotchas](#19-key-constraints-and-gotchas)
 20. [Known Gaps (Intentional)](#20-known-gaps-intentional)
+21. [Enabling Live Order Placement](#21-enabling-live-order-placement)
+22. [Capital and Position Sizing](#22-capital-and-position-sizing)
 
 ---
 
@@ -44,8 +46,8 @@ Automated research platform for Indian equities. Scans the NIFTY 500 universe (5
 - 11:00 IST — Full ECS Fargate backtest across all 8 strategies × all 513 symbols × 2019–present. Results written to DynamoDB and S3.
 - 12:30 IST — Leaderboard Lambda reads backtest results, ranks strategies by risk-adjusted returns, writes top strategy to DynamoDB.
 
-**What it does not do:**
-- Place any orders — `ENABLE_LIVE_ORDERS` is always `"false"`.
+**What it does not do (by default):**
+- Place any orders — `ENABLE_LIVE_ORDERS` is always `"false"` until explicitly changed.
 - Call broker or market APIs at scan time — all OHLCV data comes from S3 Parquet (filled by the data pipeline beforehand).
 
 ---
@@ -106,6 +108,7 @@ GitHub (push to main)
 | S3 | Data bucket (versioned, AES-256, public access blocked). Parquet OHLCV + backtest results. |
 | DynamoDB | `state` table (regime, signals, paper trades, backtest state) + `leaderboard` table (weekly ranking) |
 | Secrets Manager | `market-ai-dev/groww`, `market-ai-dev/telegram`, `market-ai-dev/openai` |
+| SSM Parameter Store | Runtime config: portfolio equity, risk limits (no deploy needed to change) |
 | CloudWatch | Log groups per function, error metric alarms |
 | ECR | Container registry (lifecycle: keep last 10 images) |
 | ECS Fargate | Weekly full-universe backtest (no Lambda 15-min timeout limitation) |
@@ -160,7 +163,7 @@ AI.Trading.Automation/
 ├── src/
 │   ├── app/                      # Core domain library (strategy-agnostic)
 │   │   ├── backtesting/          #   Engine, trade state, metrics, leaderboard
-│   │   ├── brokers/              #   GrowwBroker (holdings read; orders blocked)
+│   │   ├── brokers/              #   GrowwBroker (holdings read; orders blocked by default)
 │   │   ├── core/                 #   time_utils (NSE holidays 2024-2027), exceptions, identifiers
 │   │   ├── data/
 │   │   │   ├── nifty500_symbols.py  # 513-symbol universe + SYMBOL_RENAMES dict
@@ -291,7 +294,7 @@ Each `Signal` object contains:
 | `planned_entry_type` | `NEXT_SESSION_OPEN` for daily; `NEXT_BAR_OPEN` for intraday |
 | `planned_entry_timestamp` | Next trading day 09:15 UTC |
 | `holding_period_sessions` | 20 sessions (daily); square-off at 15:15 for intraday |
-| `status` | Always `ELIGIBLE` — no orders placed |
+| `status` | Always `ELIGIBLE` — no orders placed by default |
 | `qualification_reasons` | Human-readable list of conditions that passed |
 | `indicators["score"]` | 0–100 confidence score (set by morning handler) |
 
@@ -319,15 +322,19 @@ The score and its breakdown are attached to `sig.indicators["score"]` and `sig.i
 
 `RiskGuard` enforces portfolio-level rules per signal:
 
-| Rule | Default |
-|---|---|
-| Max open positions | configurable via `RiskConfig` |
-| Max capital in one sector | configurable |
-| Max capital in one segment (LARGE/MID/SMALL) | configurable |
-| Earnings blackout | Top-50 NIFTY 500 stocks within 3 days of earnings |
-| Daily/weekly loss limit | Real P&L from paper trade journal |
+| Rule | Default | SSM override |
+|---|---|---|
+| Max open positions | 15 | `/market-ai-dev/risk/max_open_positions` |
+| Max new entries per day | 3 | code change only |
+| Max capital in one sector | 30% | `/market-ai-dev/risk/max_sector_exposure_pct` |
+| Max capital in one segment (LARGE/MID/SMALL) | 50% | code change only |
+| Max single position size | 10% of equity | code change only |
+| Max risk per trade (stop distance) | 1% of equity | code change only |
+| Minimum signal score | 40 | code change only |
+| Earnings blackout | 3 days before earnings | code change only |
+| Daily/weekly loss limit | 2% / 5% of equity | code change only |
 
-Rejected signals are logged with reason; only approved signals reach Telegram.
+Rejected signals are logged with reason; only approved signals reach Telegram (and, if live orders are enabled, the broker).
 
 ---
 
@@ -439,6 +446,7 @@ Three secrets must be populated manually. Terraform creates the containers but d
 |---|---|
 | `bot_token` | Same as `TELEGRAM_BOT_TOKEN` GitHub secret |
 | `chat_id` | Same as `TELEGRAM_CHAT_ID` GitHub secret |
+| `weekly_chat_id` | Optional — dedicated channel for weekly reports. Falls back to `chat_id` if absent. |
 
 **`market-ai-dev/openai`:**
 
@@ -671,15 +679,16 @@ EOF
 
 | Variable | Lambda value | Purpose |
 |---|---|---|
-| `TRADING_MODE` | `RESEARCH_ONLY` | Gates paper-trading logic |
-| `ENABLE_LIVE_ORDERS` | `false` | Must be `"true"` to allow orders — never set this |
-| `BROKER_PROVIDER` | `mock` locally, `groww` in Lambda | Controls broker adapter |
+| `TRADING_MODE` | `RESEARCH_ONLY` | Gates paper-trading logic. Change to `LIVE` to enable order placement. |
+| `ENABLE_LIVE_ORDERS` | `false` | Must be `"true"` to allow orders. See Section 21. |
+| `LIVE_ORDER_PLACEMENT` | `false` | Second guard — must also be `"true"`. See Section 21. |
+| `BROKER_PROVIDER` | `mock` locally, `groww` in Lambda (when live) | Controls broker adapter. |
 | `APP_ENV` | `dev` | Environment tag in logs and DynamoDB |
 | `DATA_BUCKET` | set by Terraform | S3 bucket for OHLCV Parquet |
 | `STATE_TABLE` | set by Terraform | DynamoDB state table |
 | `LEADERBOARD_TABLE` | set by Terraform | DynamoDB leaderboard table |
-| `UNIVERSE` | `nifty500` | Symbol universe for scan handlers |
-| `PORTFOLIO_EQUITY` | `500000` | INR portfolio size for position sizing |
+| `UNIVERSE` | `nifty500` | Symbol universe for scan handlers. Also in SSM: `/market-ai-dev/universe` |
+| `PORTFOLIO_EQUITY` | read from SSM `/market-ai-dev/portfolio_equity` | INR capital allocated. Default ₹5,00,000. See Section 22. |
 | `TELEGRAM_BOT_TOKEN` | set by Terraform | Telegram bot token |
 | `TELEGRAM_CHAT_ID` | set by Terraform | Telegram chat ID |
 
@@ -886,7 +895,7 @@ When triggered:
 
 | Constraint | Detail |
 |---|---|
-| `ENABLE_LIVE_ORDERS` must be `"true"` for real orders | Hardcoded `"false"` in `main.tf` locals. `GrowwBroker.place_order()` raises `ValueError` if not exactly `"true"`. No orders under any current configuration. |
+| `ENABLE_LIVE_ORDERS` must be `"true"` for real orders | Hardcoded `"false"` in `main.tf` locals. `GrowwBroker.place_order()` raises `ValueError` if not exactly `"true"`. No orders under any current configuration. See Section 21 to enable. |
 | `fill_gaps=False` in scan handlers | Morning and evening handlers use `HybridDataProvider(fill_gaps=False)`. This means they read S3 only — zero broker/market API calls at scan time. The data pipeline must have run successfully first. If data is stale, the morning summary message explicitly says so ("Data stale: N days behind"). |
 | ECR push before Terraform apply | The deploy job pushes the image first. Reversing this order causes a Lambda update failure. |
 | `--provenance=false` on ECR push | Docker BuildKit ≥0.11 attaches OCI provenance attestation layers by default, producing an OCI Image Index. AWS Lambda `UpdateFunctionCode` only accepts single-arch Docker Schema v2 manifests. The `--provenance=false` flag on `docker build` prevents this. Do not remove it. |
@@ -915,6 +924,162 @@ These are tracked but not bugs:
 | NIFTY 500 rebalance sync | `nifty500_symbols.py` is a static snapshot (Oct 2026). It should be refreshed each March and September when NSE publishes the rebalanced constituent list. `scripts/sync_nifty500.py` provides a starting point but requires manual review. |
 | Point-in-time universe | Backtest uses the current constituent list, not the historical one. Survivorship bias exists. |
 | Pre-open Lambda IP | NSE may block Lambda NAT gateway IPs as scraping. If blocked, the handler sends a Telegram error and exits — no data is available from an alternative source at that latency. |
+| Per-strategy live order gating | Currently live orders are all-or-nothing (global `ENABLE_LIVE_ORDERS`). To restrict live orders to specific high-confidence strategies, add a filter in the morning handler before the broker call. See Section 21. |
+
+---
+
+## 21. Enabling Live Order Placement
+
+By default the system is **research-only** — it scans, scores, and alerts via Telegram but never calls the broker's order API. Four guards in `infrastructure/main.tf` enforce this:
+
+| Variable | Research (default) | Live |
+|---|---|---|
+| `TRADING_MODE` | `RESEARCH_ONLY` | `LIVE` |
+| `ENABLE_LIVE_ORDERS` | `false` | `true` |
+| `LIVE_ORDER_PLACEMENT` | `false` | `true` |
+| `BROKER_PROVIDER` | `mock` | `groww` |
+
+All four must be changed together. If any one remains at the research value, `GrowwBroker.place_order()` raises a `ValueError` before touching the API.
+
+### Steps to enable
+
+**1. Verify Groww token is healthy**
+
+```bash
+aws lambda invoke \
+  --function-name market-ai-dev-token_refresh \
+  --region ap-south-1 \
+  /tmp/token.json && cat /tmp/token.json
+# Must return: {"statusCode": 200, "body": "Token refreshed"}
+```
+
+**2. Edit `infrastructure/main.tf`** — update the `locals.common_env` block:
+
+```hcl
+locals {
+  common_env = {
+    # ... other vars unchanged ...
+    TRADING_MODE         = "LIVE"
+    LIVE_ORDER_PLACEMENT = "true"
+    ENABLE_LIVE_ORDERS   = "true"
+    BROKER_PROVIDER      = "groww"
+  }
+}
+```
+
+**3. Deploy**
+
+```bash
+git push origin main
+```
+
+CI/CD applies Terraform and Lambda picks up the new env vars within ~2 minutes.
+
+**4. Verify on next morning scan**
+
+CloudWatch log line to look for:
+```
+INFO  order placed: RELIANCE BUY 12 @ MARKET  order_id=GW-...
+```
+
+If you see `RESEARCH_ONLY — skipping order placement`, one of the four guards is still set to the research value.
+
+### Per-strategy gating (restrict live orders to specific strategies)
+
+The risk guard approves signals globally. To restrict live order placement to specific strategy IDs (e.g. only your two highest-Sharpe strategies from the leaderboard), add a filter in `src/market_ai/handlers/morning.py` before the broker call:
+
+```python
+LIVE_ORDER_STRATEGIES = {"s01_rs_momentum", "s02_vcp"}
+
+for signal in approved_signals:
+    if signal.strategy_id not in LIVE_ORDER_STRATEGIES:
+        logger.info("skipping live order for %s (strategy not in live set)", signal.symbol)
+        continue
+    broker.place_order(signal)
+```
+
+This lets you run the full 8-strategy scan for Telegram alerts while only placing orders on the strategies you trust with real capital. Update `LIVE_ORDER_STRATEGIES` and redeploy whenever the leaderboard ranking changes.
+
+### Reverting to research mode
+
+Change all four variables back to their research defaults in `main.tf` and push. No DynamoDB or S3 changes are needed.
+
+---
+
+## 22. Capital and Position Sizing
+
+Capital and risk limits are controlled via **AWS SSM Parameter Store** — no code change or redeploy needed to adjust them.
+
+### SSM parameters
+
+| SSM path | Default | What it controls |
+|---|---|---|
+| `/market-ai-dev/portfolio_equity` | `500000` | Total INR capital allocated to the system (₹5,00,000) |
+| `/market-ai-dev/risk/max_open_positions` | `15` | Maximum concurrent open positions |
+| `/market-ai-dev/risk/max_sector_exposure_pct` | `0.30` | Maximum fraction of capital in any single GICS sector (30%) |
+
+Lambda reads these on every invocation via SSM `GetParameter`.
+
+### Position sizing math
+
+These are derived from the SSM `portfolio_equity` and the `RiskConfig` defaults in `src/app/risk/engine.py`:
+
+| Parameter | Default | Formula | Example at ₹5L |
+|---|---|---|---|
+| Max position size | 10% of equity | `equity × 0.10` | ₹50,000 per trade |
+| Max risk per trade | 1% of equity | `equity × 0.01` | ₹5,000 maximum loss |
+| Quantity | derived from stop | `floor(max_risk / stop_distance_per_share)` | e.g. stop 5% below entry → 12 shares at ₹800 |
+
+**Example:** Signal for RELIANCE at ₹800 entry, stop at ₹760 (₹40 per share, 5% risk):
+- Max risk: ₹5,000
+- Quantity: `floor(5000 / 40)` = 125 shares
+- Position value: 125 × ₹800 = ₹1,00,000
+- Capped at `max_position_size_pct` ceiling: `min(125, floor(50000 / 800))` = 62 shares (₹49,600)
+
+The position sizing logic is in `src/app/risk/engine.py` (`RiskGuard.check()`).
+
+### Changing capital allocation (no deploy needed)
+
+```bash
+# Increase portfolio equity to ₹7,50,000
+aws ssm put-parameter \
+  --name /market-ai-dev/portfolio_equity \
+  --value 750000 \
+  --overwrite \
+  --region ap-south-1
+
+# Reduce max open positions to 10
+aws ssm put-parameter \
+  --name /market-ai-dev/risk/max_open_positions \
+  --value 10 \
+  --overwrite \
+  --region ap-south-1
+
+# Tighten sector exposure to 20%
+aws ssm put-parameter \
+  --name /market-ai-dev/risk/max_sector_exposure_pct \
+  --value 0.20 \
+  --overwrite \
+  --region ap-south-1
+```
+
+Changes take effect on the next Lambda invocation (no deploy needed).
+
+### Changing RiskConfig defaults (requires code change + deploy)
+
+The following risk parameters are only in code (`src/app/risk/engine.py`) and require a redeploy to change:
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `max_new_positions_per_day` | 3 | Cap on new entries in a single session |
+| `max_segment_exposure_pct` | 50% | Cap per LARGE/MID/SMALL cap segment |
+| `max_position_size_pct` | 10% | Per-trade position ceiling as % of equity |
+| `max_risk_per_trade_pct` | 1% | Max equity risked per trade via stop distance |
+| `min_signal_score` | 40 | Minimum score (0–100) to pass the risk guard |
+| `daily_loss_limit_pct` | 2% | Halt new entries if day loss ≥ this |
+| `weekly_loss_limit_pct` | 5% | Halt new entries if week loss ≥ this |
+
+Edit the `RiskConfig` dataclass defaults, then `git push origin main` to deploy.
 
 ---
 
