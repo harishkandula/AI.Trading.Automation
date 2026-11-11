@@ -111,6 +111,8 @@ class S03TrendPullback(StrategyBase):
 
             if any(v is None for v in (ema20_v, ema50_v, ema200_v, rsi_v, atr_v, vol20_v)):
                 continue
+            if vol20_v == 0:
+                continue
 
             price = closes[i]
             reasons: list[str] = []
@@ -152,11 +154,9 @@ class S03TrendPullback(StrategyBase):
                 continue
             reasons.append(f"RSI(14)={rsi_v:.1f} in pullback zone")
 
-            # 6. Volume declining during pullback (last 5 bars vs 20-day avg)
-            pullback_vol = vol_avg_20[max(0, i - _PULLBACK_VOL_BARS): i + 1]
-            recent_vol_avg = sum(v for v in pullback_vol if v is not None) / max(
-                len([v for v in pullback_vol if v is not None]), 1
-            )
+            # 6. Volume declining during pullback (last N raw bars vs 20-day avg)
+            pullback_vols = volumes[max(0, i - _PULLBACK_VOL_BARS): i]
+            recent_vol_avg = sum(pullback_vols) / len(pullback_vols) if pullback_vols else 0.0
             if recent_vol_avg >= vol20_v * p["vol_decline_ratio"]:  # type: ignore[operator]
                 continue
             reasons.append(
@@ -174,6 +174,8 @@ class S03TrendPullback(StrategyBase):
             atr_stop = price - p["atr_stop_mult"] * atr_v  # type: ignore[operator]
             ema50_stop = ema50_v * 0.995  # type: ignore[operator]
             stop = round(max(atr_stop, ema50_stop), 2)
+            if stop <= 0 or stop >= price:
+                continue
 
             risk = price - stop
             target = round(price + 2.0 * risk, 2)
@@ -205,6 +207,7 @@ class S03TrendPullback(StrategyBase):
                     "ema50": round(ema50_v, 2),  # type: ignore[arg-type]
                     "ema200": round(ema200_v, 2),  # type: ignore[arg-type]
                     "support": support_label,
+                    "rel_vol": round(volumes[i] / vol20_v, 2),  # type: ignore[operator]
                 },
                 qualification_reasons=reasons,
                 risk_warnings=["Pullback entry — confirm trend intact before entering"],

@@ -99,6 +99,8 @@ class S02VCP(StrategyBase):
 
             if any(v is None for v in (ema50_v, ema200_v, atr_v, vol20_v)):
                 continue
+            if vol20_v == 0:
+                continue
 
             price = closes[i]
             reasons: list[str] = []
@@ -202,6 +204,7 @@ class S02VCP(StrategyBase):
                     "ema200": round(ema200_v, 2),  # type: ignore[arg-type]
                     "compression_pct": round(compression * 100, 1),
                     "breakout_vol_x": round(rel_vol, 2),
+                    "rel_vol": round(rel_vol, 2),
                     "prior_advance_pct": round(advance_pct, 1),
                 },
                 qualification_reasons=reasons,

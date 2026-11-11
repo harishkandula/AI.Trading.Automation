@@ -120,6 +120,8 @@ class S00Benchmark(StrategyBase):
             entry_date = next_trading_day(ts.date())
             entry_ref = closes[i]
             stop = round(entry_ref - p["atr_stop_mult"] * atr_v, 2)  # type: ignore[operator]
+            if stop <= 0 or stop >= entry_ref:
+                continue
             target = round(entry_ref + 2.5 * (entry_ref - stop), 2)
 
             sid = signal_id(self.strategy_id, self.strategy_version, symbol, ts.isoformat())

@@ -17,7 +17,7 @@ Entry conditions:
   8. Regime: BULL or STRONG_BULL (passed in via indicators dict)
 
 Stop:  1.5× ATR(20) below entry
-Exit:  trailing 20 EMA (handled by exit monitor, not this strategy)
+Exit:  2R target (fixed fallback); trailing 20 EMA handled by exit monitor
 
 Family: MOMENTUM
 """
@@ -144,6 +144,9 @@ class S01RSMomentum(StrategyBase):
             entry_date = next_trading_day(ts.date())
             entry_ref = price
             stop = round(entry_ref - p["atr_stop_mult"] * atr_v, 2)  # type: ignore[operator]
+            if stop <= 0 or stop >= entry_ref:
+                continue
+            target = round(entry_ref + 2.0 * (entry_ref - stop), 2)
 
             sid = signal_id(self.strategy_id, self.strategy_version, symbol, ts.isoformat())
             signals.append(Signal(
@@ -161,7 +164,7 @@ class S01RSMomentum(StrategyBase):
                 ),
                 entry_reference_price=entry_ref,
                 stop_price=stop,
-                target_prices=[],   # trailing exit via 20 EMA — no fixed target
+                target_prices=[target],
                 holding_period_sessions=p["holding_sessions"],
                 indicators={
                     "rsi": round(rsi_v, 1),  # type: ignore[arg-type]
