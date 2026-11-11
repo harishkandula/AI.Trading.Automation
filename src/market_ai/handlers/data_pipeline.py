@@ -113,6 +113,14 @@ def _run_daily(target_date: date) -> dict:
         "Daily pipeline complete: %d symbols updated, %d adjusted for %s",
         updated, adjusted, target_date,
     )
+
+    try:
+        from app.notifications.notifier import Notifier  # noqa: PLC0415
+        notifier = Notifier.from_secrets()
+        notifier.send_pipeline_health(target_date, len(df), updated, adjusted)
+    except Exception:
+        log.warning("Failed to send pipeline health notification", exc_info=True)
+
     return {
         "statusCode": 200,
         "body": {

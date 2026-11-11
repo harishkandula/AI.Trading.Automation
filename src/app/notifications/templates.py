@@ -134,10 +134,16 @@ def format_daily_summary(
     scanned: int,
     signals: list[Signal],
     errors: int = 0,
+    data_lag_days: int = 0,
 ) -> str:
     """Daily scan summary for the Notifier."""
     sig_count = len(signals)
-    status = "✅ Signals found" if sig_count else "— No signals today"
+    if sig_count:
+        status = "✅ Signals found"
+    elif data_lag_days > 1:
+        status = f"⚠️ Data stale ({data_lag_days} days behind) — pipeline check needed"
+    else:
+        status = "— No signals (quiet market)"
     err_line = f"  Errors: {errors}\n" if errors else ""
 
     lines = [
@@ -160,4 +166,20 @@ def format_error_alert(context: str, error: str) -> str:
         f"<b>Market AI — Error Alert</b>\n"
         f"<b>Context:</b> {context}\n"
         f"<b>Error:</b> <code>{error[:500]}</code>"
+    )
+
+
+def format_pipeline_health(
+    run_date: date,
+    rows: int,
+    symbols: int,
+    adjusted: int = 0,
+) -> str:
+    """Daily data pipeline health ping sent after a successful run."""
+    adj_line = f"  Split-adjusted: {adjusted} symbols\n" if adjusted else ""
+    return (
+        f"<b>Market AI — Data Pipeline</b> ✅\n"
+        f"Date: {run_date} | Rows: {rows} | Symbols: {symbols}\n"
+        f"{adj_line}"
+        f"S3 is fresh — morning scan ready."
     )

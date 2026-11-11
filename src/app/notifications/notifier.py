@@ -12,6 +12,7 @@ from app.notifications import telegram
 from app.notifications.templates import (
     format_daily_summary,
     format_error_alert,
+    format_pipeline_health,
     format_signal_alert,
 )
 
@@ -60,9 +61,23 @@ class Notifier:
         scanned: int,
         signals: list[Signal],
         errors: int = 0,
+        data_lag_days: int = 0,
     ) -> bool:
         """Send daily scan summary message."""
-        text = format_daily_summary(scan_date, universe_size, scanned, signals, errors)
+        text = format_daily_summary(
+            scan_date, universe_size, scanned, signals, errors, data_lag_days
+        )
+        return telegram.send(self._bot_token, self._chat_id, text)
+
+    def send_pipeline_health(
+        self,
+        run_date: date,
+        rows: int,
+        symbols: int,
+        adjusted: int = 0,
+    ) -> bool:
+        """Send pipeline health ping after a successful daily run."""
+        text = format_pipeline_health(run_date, rows, symbols, adjusted)
         return telegram.send(self._bot_token, self._chat_id, text)
 
     def send_error_alert(self, context: str, error: str) -> bool:

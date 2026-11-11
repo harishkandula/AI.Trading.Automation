@@ -11,12 +11,12 @@ IST = ZoneInfo("Asia/Kolkata")
 _WARMUP_DAYS = 400
 
 
-def _check_data_freshness(today) -> str | None:
+def _check_data_freshness(today) -> tuple[str | None, int]:
     import os
     from app.data.store import ParquetStore
     bucket = os.environ.get("DATA_BUCKET", "")
     if not bucket:
-        return None
+        return None, 0
     store = ParquetStore(bucket)
     probe_symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
     latest_dates = []
@@ -25,7 +25,10 @@ def _check_data_freshness(today) -> str | None:
         if d:
             latest_dates.append(d)
     if not latest_dates:
-        return "WARNING: No S3 data found for probe symbols — data pipeline may have never run."
+        return (
+            "WARNING: No S3 data found for probe symbols — data pipeline may have never run.",
+            999,
+        )
     most_recent = max(latest_dates)
     from app.core.time_utils import prev_trading_day
     expected = prev_trading_day(today)
@@ -33,9 +36,10 @@ def _check_data_freshness(today) -> str | None:
     if lag_days > 1:
         return (
             f"WARNING: S3 data is stale — latest {most_recent}, expected {expected} "
-            f"({lag_days} trading days behind). Signals may be based on old prices."
+            f"({lag_days} trading days behind). Signals may be based on old prices.",
+            lag_days,
         )
-    return None
+    return None, 0
 
 
 def _persist_regime(regime_snapshot, today) -> None:
@@ -140,7 +144,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
 
     today = datetime.now(tz=IST).date()
 
-    freshness_warning = _check_data_freshness(today)
+    freshness_warning, data_lag_days = _check_data_freshness(today)
     if freshness_warning:
         log.warning(freshness_warning)
         try:
@@ -157,7 +161,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     symbols = get_universe(universe_name)
     strategies = all_strategies()
 
-    # ── Compute market regime (best-effort) ──────────────────────────────────
+    # ── Compute market regime (best-effort) ────────────────────────────────────────────
     regime = MarketRegime.UNKNOWN
     regime_snapshot = None
     try:
@@ -178,7 +182,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
     except Exception:
         log.warning("Regime computation failed — falling back to UNKNOWN", exc_info=True)
 
-    # ── Compute RS percentiles across the full universe (best-effort) ────────
+    # ── Compute RS percentiles across the full universe (best-effort) ────────────────────
     rs_percentiles: dict[str, float] = {}
     sector_ranks: dict[str, int] = {}
     try:
@@ -373,6 +377,7 @@ def handler(event: object, context: object) -> dict:  # type: ignore[type-arg]
             scanned=scanned,
             signals=scored_signals,
             errors=errors,
+            data_lag_days=data_lag_days,
         )
     except Exception:
         log.exception("Failed to send Telegram notifications")
