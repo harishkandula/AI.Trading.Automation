@@ -2,9 +2,9 @@
 
 Runs every Sunday at 10:00 IST (cron(30 4 ? * SUN *)).
 
-Two notifications are sent:
-  1. Compounder research scan  → main Telegram channel (chat_id)
-  2. Weekly performance report → weekly Telegram channel (weekly_chat_id)
+Both notifications go to the weekly Telegram channel (weekly_chat_id):
+  1. Compounder research scan
+  2. Weekly performance report (closed trades, open positions, strategy R)
 
 Scoring factors for the compounder scan (all derived from S3 Parquet candles):
   - 52-week momentum     : close vs 52-week high (higher = stronger trend)
@@ -173,6 +173,7 @@ def _ema(closes: Any, period: int) -> Any:
 
 
 def _notify(today: date, candidates: list[dict[str, Any]]) -> None:
+    """Send compounder research scan to the weekly Telegram channel."""
     try:
         from app.notifications import telegram  # noqa: PLC0415
         from app.notifications.notifier import Notifier  # noqa: PLC0415
@@ -207,7 +208,7 @@ def _notify(today: date, candidates: list[dict[str, Any]]) -> None:
         if ai_summary:
             lines += ["", "<b>AI Market Summary</b>", ai_summary]
 
-        telegram.send(notifier._bot_token, notifier._chat_id, "\n".join(lines))  # noqa: SLF001
+        telegram.send(notifier._bot_token, notifier._weekly_chat_id, "\n".join(lines))  # noqa: SLF001
     except Exception:
         log.warning("Weekly Telegram notification failed", exc_info=True)
 
@@ -310,7 +311,6 @@ def _fetch_closed_paper_trades_this_week(today: date) -> list[dict[str, Any]]:
         if not table_name:
             return []
 
-        # Current week Mon–Sun (IST)
         monday = today - timedelta(days=today.weekday())
         sunday = monday + timedelta(days=6)
         week_start = monday.isoformat()
@@ -380,7 +380,6 @@ def _fetch_open_trades_with_cmp(today: date) -> list[dict[str, Any]]:
 
         trades = [{k: _norm(v) for k, v in item.items()} for item in items]
 
-        # Augment each trade with the latest close from S3 (Friday's close by Sunday)
         bucket = os.environ.get("DATA_BUCKET", "")
         if bucket and trades:
             store = ParquetStore(bucket)
