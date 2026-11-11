@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.exceptions import InsufficientDataError
 from app.core.identifiers import signal_id
 from app.core.time_utils import next_trading_day
 from app.indicators.candlestick_patterns import CandleAttrs, is_morning_star
@@ -29,8 +30,8 @@ class MorningStar(StrategyBase):
             "c2_body_max_ratio": 0.30,
             "stop_pct": 0.03,
             "holding_sessions": 5,
-            "require_supertrend": False,
-            "require_volume_above_avg": False,
+            "require_supertrend": True,
+            "require_volume_above_avg": True,
             "volume_period": 20,
             "st_period": 10,
             "st_multiplier": 3.0,
@@ -52,7 +53,10 @@ class MorningStar(StrategyBase):
         volumes = [c.volume for c in candles]
 
         p = self.params
-        st_results = supertrend(highs, lows, closes, p["st_period"], p["st_multiplier"])
+        try:
+            st_results = supertrend(highs, lows, closes, p["st_period"], p["st_multiplier"])
+        except InsufficientDataError:
+            return []
         vol_avg = volume_sma(volumes, p["volume_period"])
 
         for i in range(max(self.warmup_bars, 2), as_of_index + 1):
@@ -82,12 +86,21 @@ class MorningStar(StrategyBase):
                 else:
                     fails.append("Supertrend not positive")
 
+            avg = vol_avg[i]
+            rel_vol = 0.0
             if p["require_volume_above_avg"]:
-                avg = vol_avg[i]
-                if avg is not None and volumes[i] > avg:
-                    reasons.append(f"Volume {volumes[i]:.0f} > {p['volume_period']}d avg {avg:.0f}")
+                if avg is not None and avg > 0:
+                    rel_vol = volumes[i] / avg
+                    if volumes[i] > avg:
+                        reasons.append(
+                            f"Volume {volumes[i]:.0f} > {p['volume_period']}d avg {avg:.0f}"
+                        )
+                    else:
+                        fails.append("Volume not above average")
                 else:
-                    fails.append("Volume not above average")
+                    fails.append("Insufficient volume history")
+            elif avg is not None and avg > 0:
+                rel_vol = volumes[i] / avg
 
             if fails:
                 continue
@@ -96,6 +109,7 @@ class MorningStar(StrategyBase):
             entry_date = next_trading_day(ts.date())
             entry_ref = candles[i].close
             stop = round(entry_ref * (1 - p["stop_pct"]), 4)
+            target = round(entry_ref + 2.0 * (entry_ref - stop), 4)
             sid = signal_id(self.strategy_id, self.strategy_version, symbol, ts.isoformat())
 
             signals.append(Signal(
@@ -113,8 +127,13 @@ class MorningStar(StrategyBase):
                 ),
                 entry_reference_price=entry_ref,
                 stop_price=stop,
+                target_prices=[target],
                 holding_period_sessions=p["holding_sessions"],
-                indicators={"c3_close": candles[i].close, "c1_body_ratio": round(c1.body_ratio, 3)},
+                indicators={
+                    "c3_close": candles[i].close,
+                    "c1_body_ratio": round(c1.body_ratio, 3),
+                    "rel_vol": round(rel_vol, 2),
+                },
                 qualification_reasons=reasons,
                 risk_warnings=["Historical strategy evidence required before acting"],
                 parameter_snapshot=dict(self.params),

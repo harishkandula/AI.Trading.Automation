@@ -6,7 +6,7 @@ from typing import Any
 from app.core.identifiers import signal_id
 from app.core.time_utils import IST, INTRADAY_SIGNAL_START, INTRADAY_NO_NEW_ENTRY
 from app.indicators.supertrend import supertrend
-from app.indicators.support_resistance import rolling_support
+from app.indicators.support_resistance import rolling_support, rolling_resistance
 from app.indicators.vwap import session_vwap
 from app.models.candle import Candle, Timeframe
 from app.models.signal import Signal, SignalStatus
@@ -36,6 +36,7 @@ class IntradaySupportSupertrend(StrategyBase):
             "stop_adjustment_mode": "FIXED_PCT_OF_ENTRY",
             "stop_adjustment_pct": 0.02,
             "squareoff_time": "15:15",
+            "holding_sessions": 1,
         }
 
     def generate_signals(
@@ -57,6 +58,7 @@ class IntradaySupportSupertrend(StrategyBase):
         p = self.params
         st_results = supertrend(highs, lows, closes, p["st_period"], p["st_multiplier"])
         support_vals = rolling_support(lows, p["support_lookback"])
+        resistance_vals = rolling_resistance(highs, p["support_lookback"])
         vwap_vals = session_vwap(timestamps, highs, lows, closes, volumes)
 
         mode = p["mode"]
@@ -76,7 +78,6 @@ class IntradaySupportSupertrend(StrategyBase):
                 continue
 
             prev_low = lows[i - 1]
-            closes[i - 1]
             cur_close = closes[i]
 
             reasons: list[str] = []
@@ -106,8 +107,6 @@ class IntradaySupportSupertrend(StrategyBase):
                 else:
                     fails.append("Price not bouncing near support")
             elif mode == "RESISTANCE_BREAKOUT":
-                from app.indicators.support_resistance import rolling_resistance
-                resistance_vals = rolling_resistance(highs, p["support_lookback"])
                 resistance = resistance_vals[i]
                 if resistance is not None and cur_close > resistance:
                     reasons.append(f"Breakout above resistance {resistance:.2f}")
@@ -151,6 +150,7 @@ class IntradaySupportSupertrend(StrategyBase):
                 entry_reference_price=entry_ref,
                 stop_price=stop,
                 target_prices=[target1],
+                holding_period_sessions=p["holding_sessions"],
                 indicators={
                     "support": round(support, 2),
                     "supertrend": round(st.value or 0, 2),

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.exceptions import InsufficientDataError
 from app.core.identifiers import signal_id
 from app.core.time_utils import next_trading_day
 from app.indicators.rsi import wilder_rsi
@@ -33,7 +34,6 @@ class RSISuperTrendVolume(StrategyBase):
             "volume_variant": "prev_day",   # prev_day | 1.25x_10d | 1.50x_20d
             "stop_pct": 0.03,
             "holding_sessions": 5,
-            "ema_filter": False,
         }
 
     def generate_signals(
@@ -51,12 +51,8 @@ class RSISuperTrendVolume(StrategyBase):
         lows = [c.low for c in candles]
         volumes = [c.volume for c in candles]
 
-        from app.core.exceptions import InsufficientDataError
         try:
             rsi_values = wilder_rsi(closes, self.params["rsi_period"])
-        except InsufficientDataError:
-            return []
-        try:
             st_results = supertrend(
                 highs, lows, closes, self.params["st_period"], self.params["st_multiplier"]
             )
@@ -76,6 +72,7 @@ class RSISuperTrendVolume(StrategyBase):
 
             reasons: list[str] = []
             fails: list[str] = []
+            rel_vol = 0.0
 
             # RSI condition
             if p["rsi_min"] <= rsi_val <= p["rsi_max"]:
@@ -98,12 +95,16 @@ class RSISuperTrendVolume(StrategyBase):
                     vol_ok = volumes[i] > volumes[i - 1]
                     if vol_ok:
                         reasons.append(f"Volume {volumes[i]:.0f} > prev {volumes[i-1]:.0f}")
+                        avg20 = vol_avg_20[i]
+                        if avg20 and avg20 > 0:
+                            rel_vol = volumes[i] / avg20
                     else:
                         fails.append(f"Volume {volumes[i]:.0f} <= prev {volumes[i-1]:.0f}")
             elif variant == "1.25x_10d":
                 avg = vol_avg_10[i]
-                if avg is not None:
+                if avg is not None and avg > 0:
                     threshold = 1.25 * avg
+                    rel_vol = volumes[i] / avg
                     vol_ok = volumes[i] >= threshold
                     if vol_ok:
                         reasons.append(
@@ -113,11 +114,14 @@ class RSISuperTrendVolume(StrategyBase):
                         fails.append("Volume < 1.25x 10d avg")
             elif variant == "1.50x_20d":
                 avg = vol_avg_20[i]
-                if avg is not None:
+                if avg is not None and avg > 0:
                     threshold = 1.50 * avg
+                    rel_vol = volumes[i] / avg
                     vol_ok = volumes[i] >= threshold
                     if vol_ok:
-                        reasons.append(f"Volume {volumes[i]:.0f} >= 1.50x 20d avg {threshold:.0f}")
+                        reasons.append(
+                            f"Volume {volumes[i]:.0f} >= 1.50x 20d avg {threshold:.0f}"
+                        )
                     else:
                         fails.append("Volume < 1.50x 20d avg")
 
@@ -125,12 +129,12 @@ class RSISuperTrendVolume(StrategyBase):
                 continue
 
             ts = candles[i].timestamp
-            decision_ts = ts
             entry_date = next_trading_day(ts.date())
             entry_ref = candles[i].close
             stop = round(entry_ref * (1 - p["stop_pct"]), 4)
+            target = round(entry_ref + 2.0 * (entry_ref - stop), 4)
             sid = signal_id(
-                self.strategy_id, self.strategy_version, symbol, decision_ts.isoformat()
+                self.strategy_id, self.strategy_version, symbol, ts.isoformat()
             )
 
             signals.append(Signal(
@@ -141,18 +145,20 @@ class RSISuperTrendVolume(StrategyBase):
                 exchange="NSE",
                 timeframe=self.timeframe.value,
                 signal_timestamp=ts,
-                decision_timestamp=decision_ts,
+                decision_timestamp=ts,
                 planned_entry_type="NEXT_SESSION_OPEN",
                 planned_entry_timestamp=datetime(
                     entry_date.year, entry_date.month, entry_date.day, 9, 15, tzinfo=timezone.utc
                 ),
                 entry_reference_price=entry_ref,
                 stop_price=stop,
+                target_prices=[target],
                 holding_period_sessions=p["holding_sessions"],
                 indicators={
                     "rsi": round(rsi_val, 2),
                     "supertrend": round(st.value or 0, 2),
                     "volume": volumes[i],
+                    "rel_vol": round(rel_vol, 2),
                 },
                 qualification_reasons=reasons,
                 risk_warnings=["Historical strategy evidence required before acting"],

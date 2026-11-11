@@ -64,7 +64,9 @@ class GapUpVolume(StrategyBase):
                 fails.append(f"Gap {gap_pct:.2f}% <= {p['gap_min_pct']}%")
 
             avg = vol_avg[i - 1]  # use prior complete sessions only
-            if avg is not None:
+            rel_vol = 0.0
+            if avg is not None and avg > 0:
+                rel_vol = cur_vol / avg
                 threshold = p["volume_multiplier"] * avg
                 if cur_vol >= threshold:
                     reasons.append(
@@ -88,8 +90,9 @@ class GapUpVolume(StrategyBase):
 
             ts = candles[i].timestamp
             entry_date = next_trading_day(ts.date())
-            entry_ref = candles[i].close
+            entry_ref = cur_close
             stop = round(entry_ref * (1 - p["stop_pct"]), 4)
+            target = round(entry_ref + 2.0 * (entry_ref - stop), 4)
             sid = signal_id(self.strategy_id, self.strategy_version, symbol, ts.isoformat())
 
             signals.append(Signal(
@@ -107,11 +110,13 @@ class GapUpVolume(StrategyBase):
                 ),
                 entry_reference_price=entry_ref,
                 stop_price=stop,
+                target_prices=[target],
                 holding_period_sessions=p["holding_sessions"],
                 indicators={
                     "gap_pct": round(gap_pct, 2),
                     "volume": cur_vol,
                     "volume_avg": round(avg or 0, 0),
+                    "rel_vol": round(rel_vol, 2),
                 },
                 qualification_reasons=reasons,
                 risk_warnings=[
