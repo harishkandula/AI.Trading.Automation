@@ -41,7 +41,7 @@ def _flat_candles(n: int = 250, price: float = 100.0) -> list[Candle]:
     return [_make_candle(i, price, 500_000) for i in range(n)]
 
 
-# ── S00 Benchmark ────────────────────────────────────────────────────────────
+# ── S00 Benchmark ────────────────────────────────────────────
 
 class TestS00Benchmark:
     def test_registers(self):
@@ -60,13 +60,30 @@ class TestS00Benchmark:
         result = strategy.generate_signals("TREND", candles)
         assert isinstance(result, list)
 
-    def test_signals_have_stop_price(self):
+    def test_stop_below_entry_and_positive(self):
         strategy = get("s00_benchmark")()
         candles = _trending_candles(200)
         signals = strategy.generate_signals("TREND", candles)
         for sig in signals:
             assert sig.stop_price is not None
+            assert sig.stop_price > 0
             assert sig.stop_price < sig.entry_reference_price
+
+    def test_target_prices_set(self):
+        strategy = get("s00_benchmark")()
+        candles = _trending_candles(200)
+        signals = strategy.generate_signals("TREND", candles)
+        for sig in signals:
+            assert len(sig.target_prices) >= 1
+            assert sig.target_prices[0] > sig.entry_reference_price
+
+    def test_rel_vol_in_indicators(self):
+        strategy = get("s00_benchmark")()
+        candles = _trending_candles(200)
+        signals = strategy.generate_signals("TREND", candles)
+        for sig in signals:
+            assert "rel_vol" in sig.indicators
+            assert sig.indicators["rel_vol"] >= 1.0
 
     def test_insufficient_data_returns_empty(self):
         strategy = get("s00_benchmark")()
@@ -86,14 +103,13 @@ class TestS00Benchmark:
         candles = _trending_candles(200)
         sigs_full = strategy.generate_signals("T", candles, as_of_index=199)
         sigs_partial = strategy.generate_signals("T", candles, as_of_index=150)
-        # Partial run must not see signals that require future bars
         full_ts = {s.signal_timestamp for s in sigs_full}
         partial_ts = {s.signal_timestamp for s in sigs_partial}
         for ts in partial_ts:
             assert ts in full_ts
 
 
-# ── S01 RS Momentum ──────────────────────────────────────────────────────────
+# ── S01 RS Momentum ──────────────────────────────────────────
 
 class TestS01RSMomentum:
     def test_registers(self):
@@ -107,29 +123,39 @@ class TestS01RSMomentum:
 
     def test_signals_require_trend_structure(self):
         strategy = get("s01_rs_momentum")()
-        # Downtrend — price below EMAs
         candles = [_make_candle(i, 200.0 - i * 0.3) for i in range(200)]
         signals = strategy.generate_signals("DOWN", candles)
         assert signals == []
 
-    def test_no_fixed_target(self):
-        """S01 uses trailing exit, not fixed target."""
+    def test_has_2r_target(self):
+        """S01 uses trailing exit; 2R target is paper-monitor fallback."""
         strategy = get("s01_rs_momentum")()
         candles = _trending_candles(200)
         signals = strategy.generate_signals("TREND", candles)
         for sig in signals:
-            assert sig.target_prices == []
+            assert len(sig.target_prices) == 1
+            risk = sig.entry_reference_price - sig.stop_price
+            expected = round(sig.entry_reference_price + 2.0 * risk, 2)
+            assert abs(sig.target_prices[0] - expected) < 0.1
 
-    def test_stop_below_entry(self):
+    def test_stop_below_entry_and_positive(self):
         strategy = get("s01_rs_momentum")()
         candles = _trending_candles(200)
         signals = strategy.generate_signals("TREND", candles)
         for sig in signals:
             if sig.stop_price:
+                assert sig.stop_price > 0
                 assert sig.stop_price < sig.entry_reference_price
 
+    def test_rel_vol_in_indicators(self):
+        strategy = get("s01_rs_momentum")()
+        candles = _trending_candles(200)
+        signals = strategy.generate_signals("TREND", candles)
+        for sig in signals:
+            assert "rel_vol" in sig.indicators
 
-# ── S02 VCP ───────────────────────────────────────────────────────────────────
+
+# ── S02 VCP ─────────────────────────────────────────────────
 
 class TestS02VCP:
     def test_registers(self):
@@ -155,13 +181,20 @@ class TestS02VCP:
             assert len(sig.target_prices) == 2
             assert sig.target_prices[1] > sig.target_prices[0]
 
+    def test_rel_vol_in_indicators(self):
+        strategy = get("s02_vcp")()
+        candles = _trending_candles(250)
+        signals = strategy.generate_signals("TREND", candles)
+        for sig in signals:
+            assert "rel_vol" in sig.indicators
+
     def test_insufficient_data(self):
         strategy = get("s02_vcp")()
         signals = strategy.generate_signals("X", _trending_candles(50))
         assert signals == []
 
 
-# ── S03 Trend Pullback ───────────────────────────────────────────────────────
+# ── S03 Trend Pullback ─────────────────────────────────────────
 
 class TestS03TrendPullback:
     def test_registers(self):
@@ -179,13 +212,29 @@ class TestS03TrendPullback:
         signals = strategy.generate_signals("DOWN", candles)
         assert signals == []
 
-    def test_stop_above_ema50_proxy(self):
+    def test_stop_below_entry_and_positive(self):
         strategy = get("s03_trend_pullback")()
         candles = _trending_candles(200)
         signals = strategy.generate_signals("TREND", candles)
         for sig in signals:
             assert sig.stop_price is not None
+            assert sig.stop_price > 0
             assert sig.stop_price < sig.entry_reference_price
+
+    def test_rel_vol_in_indicators(self):
+        strategy = get("s03_trend_pullback")()
+        candles = _trending_candles(200)
+        signals = strategy.generate_signals("TREND", candles)
+        for sig in signals:
+            assert "rel_vol" in sig.indicators
+
+    def test_target_prices_set(self):
+        strategy = get("s03_trend_pullback")()
+        candles = _trending_candles(200)
+        signals = strategy.generate_signals("TREND", candles)
+        for sig in signals:
+            assert len(sig.target_prices) >= 1
+            assert sig.target_prices[0] > sig.entry_reference_price
 
     def test_insufficient_data(self):
         strategy = get("s03_trend_pullback")()

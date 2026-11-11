@@ -35,7 +35,7 @@ def _base_candles(n=50, sym="TEST", base=100.0):
     return candles
 
 
-# ── GapUpVolume ────────────────────────────────────────────────────────────────
+# ── GapUpVolume ─────────────────────────────────────────────────────
 
 def test_gap_up_no_signal_without_gap():
     candles = _base_candles(30)
@@ -57,12 +57,28 @@ def test_gap_up_signal_when_conditions_met():
     assert signals[-1].indicators["gap_pct"] > 3.0
 
 
+def test_gap_up_has_rel_vol_and_target():
+    candles = _base_candles(20)
+    prev = candles[-1]
+    p = prev.close
+    vol5 = int(prev.volume * 5)
+    gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.06, p*1.04, p*1.055, vol5)
+    candles.append(gap_candle)
+    strat = GapUpVolume()
+    signals = strat.generate_signals("TEST", candles, as_of_index=len(candles)-1)
+    for sig in signals:
+        assert "rel_vol" in sig.indicators
+        assert sig.indicators["rel_vol"] >= 3.0
+        assert len(sig.target_prices) == 1
+        assert sig.target_prices[0] > sig.entry_reference_price
+
+
 def test_gap_up_no_signal_when_close_below_open():
     candles = _base_candles(20)
     prev = candles[-1]
     p = prev.close
-    # open 1.05x, close 1.04x → close < open → fails require_close_above_open
     vol5 = int(prev.volume * 5)
+    # open 1.05x, close 1.04x → close < open → fails require_close_above_open
     gap_candle = _daily("TEST", date(2024, 2, 1), p*1.05, p*1.06, p*1.02, p*1.04, vol5)
     candles.append(gap_candle)
     strat = GapUpVolume()
@@ -86,21 +102,23 @@ def test_gap_up_stop_is_3pct_below_entry():
         assert abs(sig.stop_price - expected_stop) < 0.01
 
 
-# ── MorningStar ────────────────────────────────────────────────────────────────
+# ── MorningStar ────────────────────────────────────────────────
+
+def test_morning_star_confirmations_enabled_by_default():
+    strat = MorningStar()
+    assert strat.params["require_supertrend"] is True
+    assert strat.params["require_volume_above_avg"] is True
+
 
 def test_morning_star_signal_generated():
-    # Build base candles, then inject a morning star pattern
     candles = _base_candles(35)
     base_price = candles[-1].close
     d = date(2024, 3, 1)
-    # C1: big bearish
     candles.append(_daily("TEST", d, base_price, base_price+1, base_price-18, base_price-15))
     d2 = date(2024, 3, 4)
-    # C2: doji
     candles.append(_daily("TEST", d2, base_price-15, base_price-13, base_price-17, base_price-14.5))
     d3 = date(2024, 3, 5)
-    # C3: bullish, closes above midpoint of C1
-    mid = (base_price + (base_price - 15)) / 2  # midpoint of C1 real body
+    mid = (base_price + (base_price - 15)) / 2
     candles.append(_daily("TEST", d3, base_price-14, base_price+2, base_price-15, mid+5))
     strat = MorningStar()
     signals = strat.generate_signals("TEST", candles, as_of_index=len(candles)-1)
@@ -108,13 +126,30 @@ def test_morning_star_signal_generated():
     assert len(last) >= 1
 
 
-# ── RSISuperTrendVolume ────────────────────────────────────────────────────────
+def test_morning_star_has_rel_vol_and_target():
+    candles = _base_candles(35)
+    base_price = candles[-1].close
+    d = date(2024, 3, 1)
+    candles.append(_daily("TEST", d, base_price, base_price+1, base_price-18, base_price-15))
+    d2 = date(2024, 3, 4)
+    candles.append(_daily("TEST", d2, base_price-15, base_price-13, base_price-17, base_price-14.5))
+    d3 = date(2024, 3, 5)
+    mid = (base_price + (base_price - 15)) / 2
+    candles.append(_daily("TEST", d3, base_price-14, base_price+2, base_price-15, mid+5,
+                          vol=2_000_000))
+    strat = MorningStar()
+    signals = strat.generate_signals("TEST", candles, as_of_index=len(candles)-1)
+    for sig in [s for s in signals if s.signal_timestamp == candles[-1].timestamp]:
+        assert "rel_vol" in sig.indicators
+        assert len(sig.target_prices) == 1
+        assert sig.target_prices[0] > sig.entry_reference_price
+
+
+# ── RSISuperTrendVolume ─────────────────────────────────────────
 
 def test_rsi_strategy_no_signals_on_short_history():
-    # With fewer bars than warmup, strategy should return empty, not raise
     candles = _base_candles(5)
     strat = RSISuperTrendVolume()
-    # Should not raise; returns empty because warmup not satisfied
     try:
         signals = strat.generate_signals("TEST", candles)
         assert len(signals) == 0
@@ -131,3 +166,18 @@ def test_rsi_strategy_signal_has_required_fields():
         assert sig.stop_price is not None
         assert sig.stop_price < sig.entry_reference_price
         assert sig.holding_period_sessions == 5
+
+
+def test_rsi_strategy_has_rel_vol_and_target():
+    candles = _base_candles(60)
+    strat = RSISuperTrendVolume()
+    signals = strat.generate_signals("TEST", candles)
+    for sig in signals:
+        assert "rel_vol" in sig.indicators
+        assert len(sig.target_prices) == 1
+        assert sig.target_prices[0] > sig.entry_reference_price
+
+
+def test_rsi_strategy_no_dead_ema_filter_param():
+    strat = RSISuperTrendVolume()
+    assert "ema_filter" not in strat.params
