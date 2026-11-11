@@ -23,18 +23,20 @@ Automated research platform for Indian equities. Scans the NIFTY 500 universe (5
 13. [Local Development](#13-local-development)
 14. [CI/CD Pipeline](#14-cicd-pipeline)
 15. [Groww Authentication](#15-groww-authentication)
-16. [Adding a New Strategy](#16-adding-a-new-strategy)
-17. [Symbol Universe](#17-symbol-universe)
-18. [Key Constraints and Gotchas](#18-key-constraints-and-gotchas)
-19. [Known Gaps (Intentional)](#19-known-gaps-intentional)
+16. [Streamlit Dashboard](#16-streamlit-dashboard)
+17. [Adding a New Strategy](#17-adding-a-new-strategy)
+18. [Symbol Universe](#18-symbol-universe)
+19. [Key Constraints and Gotchas](#19-key-constraints-and-gotchas)
+20. [Known Gaps (Intentional)](#20-known-gaps-intentional)
 
 ---
 
 ## 1. What This System Does
 
 **Every trading day (automated):**
-- 04:00 IST — Data pipeline fetches NSE bhavcopy, appends to S3 Parquet, detects corporate actions (splits, bonuses), adjusts prices, updates indicators.
-- 07:00 IST — Morning scan: all 513 NIFTY 500 symbols × 8 strategies. Signals are scored (0–100) and filtered through a portfolio risk guard. Top signals sent to Telegram.
+- 04:00 IST — Data pipeline fetches NSE bhavcopy, appends to S3 Parquet, detects corporate actions (splits, bonuses), adjusts prices, updates indicators. Sends a health ping to Telegram on success.
+- 07:00 IST — Morning scan: all 513 NIFTY 500 symbols × 8 strategies. Signals are scored (0–100) and filtered through a portfolio risk guard. Top signals sent to Telegram. Daily summary distinguishes "no signals (quiet market)" from "no signals (data stale)".
+- 09:05 IST — Pre-open scan: fetches live NSE IEP (Indicative Equilibrium Price) data from the call auction, scores gap quality + order book imbalance, cross-references with morning signals. Sends ranked watchlist to Telegram with GPT-4o commentary.
 - 19:00 IST — Evening scan: same as morning + reads Groww holdings for open position count.
 
 **Every Sunday (automated):**
@@ -71,9 +73,10 @@ GitHub (push to main)
   AWS Lambda (container, 1 GB)          ECS Fargate (4 vCPU / 8 GB)
   ┌────────────┬──────────────────┐     ┌──────────────────────────┐
   │ morning    │ 07:00 IST M-F    │     │ backtest (Sunday 11:00)  │
-  │ evening    │ 19:00 IST M-F    │     │ 554 symbols × 8 strats   │
-  │ weekly     │ 10:00 IST Sun    │     │ 2019-present, no timeout │
-  │ token_refresh│ 06:00 IST daily│     └──────────────────────────┘
+  │ pre_open   │ 09:05 IST M-F    │     │ 513 symbols × 8 strats   │
+  │ evening    │ 19:00 IST M-F    │     │ 2019-present, no timeout │
+  │ weekly     │ 10:00 IST Sun    │     └──────────────────────────┘
+  │ token_refresh│ 06:00 IST daily│
   │ data_pipeline│ 04:00 IST M-F  │
   │ leaderboard│ 12:30 IST Sun    │
   └────────────┴──────────────────┘
@@ -81,23 +84,28 @@ GitHub (push to main)
         ▼                    ▼
   Telegram Bot          S3 (Parquet)
   (signals, summary,    ohlcv/daily/{SYMBOL}.parquet
-   errors, weekly)      ohlcv/daily/{SYMBOL}.adjusted_flag
-                        backtest/{run_id}/results.json
+   pre-open watchlist,  ohlcv/daily/{SYMBOL}.adjusted_flag
+   health pings,        backtest/{run_id}/results.json
+   errors, weekly)
         │
         ▼
   DynamoDB
-  ├── market-ai-dev-state      (backtest state, open trades)
+  ├── market-ai-dev-state      (regime, signals, paper trades, backtest state)
   └── market-ai-dev-leaderboard (weekly strategy ranking)
+
+  Streamlit Community Cloud
+  └── dashboard/ (signals, P&L, leaderboard, backtest, regime)
+      reads DynamoDB + S3 via static AWS key in st.secrets
 ```
 
 **AWS services:**
 
 | Service | Role |
 |---|---|
-| EventBridge | 9 scheduled rules (see Schedule section) |
+| EventBridge | 10 scheduled rules (see Schedule section) |
 | S3 | Data bucket (versioned, AES-256, public access blocked). Parquet OHLCV + backtest results. |
-| DynamoDB | `state` table (backtest/trade state) + `leaderboard` table (weekly ranking) |
-| Secrets Manager | `market-ai-dev/groww` (API key + TOTP + access token), `market-ai-dev/telegram` |
+| DynamoDB | `state` table (regime, signals, paper trades, backtest state) + `leaderboard` table (weekly ranking) |
+| Secrets Manager | `market-ai-dev/groww`, `market-ai-dev/telegram`, `market-ai-dev/openai` |
 | CloudWatch | Log groups per function, error metric alarms |
 | ECR | Container registry (lifecycle: keep last 10 images) |
 | ECS Fargate | Weekly full-universe backtest (no Lambda 15-min timeout limitation) |
@@ -112,6 +120,7 @@ GitHub (push to main)
 | `token_refresh` | `cron(30 0 ? * * *)` | 06:00 | Daily |
 | `morning` | `cron(30 1 ? * MON-FRI *)` | 07:00 | Mon–Fri |
 | `data_pipeline` | `cron(30 22 ? * SUN-THU *)` | 04:00 | Mon–Fri |
+| `pre_open` | `cron(35 3 ? * MON-FRI *)` | 09:05 | Mon–Fri |
 | Pre-warm evening | `cron(28 13 ? * MON-FRI *)` | 18:58 | Mon–Fri |
 | `evening` | `cron(30 13 ? * MON-FRI *)` | 19:00 | Mon–Fri |
 | `weekly` | `cron(30 4 ? * SUN *)` | 10:00 | Sunday |
@@ -121,6 +130,8 @@ GitHub (push to main)
 IST = UTC+5:30. All EventBridge rules use UTC.
 
 **Pre-warm pings:** Two EventBridge rules fire at 06:58 and 18:58 IST with `{"_prewarm": true}`. Each handler detects this payload and returns immediately, keeping the Lambda container warm and eliminating the cold-start penalty on the actual scan invocations 2 minutes later.
+
+**Pre-open timing:** `pre_open` fires at 09:05 IST, 5 minutes into the call auction window (09:00–09:08 IST). NSE IEP data reflects real buy/sell orders already submitted — it is fetched live, independent of the S3 data pipeline.
 
 **Sunday order dependency:** ECS backtest (11:00) must complete before the leaderboard Lambda (12:30) reads DynamoDB. The 90-minute gap is conservative; the backtest typically finishes in under 5 minutes.
 
@@ -133,11 +144,18 @@ AI.Trading.Automation/
 ├── .github/
 │   └── workflows/
 │       └── main.yml              # CI/CD: validate → docker-build → deploy
+├── .streamlit/
+│   └── secrets.toml.example      # Template for Streamlit Cloud secrets
 ├── infrastructure/
-│   └── main.tf                   # All AWS resources (IaC)
+│   ├── main.tf                   # Core AWS resources (IaC)
+│   └── pre_open.tf               # Pre-open Lambda + EventBridge rule
+├── dashboard/
+│   ├── app.py                    # 5-page Streamlit dashboard
+│   └── requirements.txt
 ├── scripts/
 │   ├── run_backtest.py           # Local/manual backtest CLI
 │   ├── run_screener.py           # One-off screener CLI
+│   ├── sync_nifty500.py          # Semi-annual constituent sync CLI
 │   └── validate_environment.py  # Pre-flight check (run in CI validate step)
 ├── src/
 │   ├── app/                      # Core domain library (strategy-agnostic)
@@ -153,13 +171,17 @@ AI.Trading.Automation/
 │   │   │   └── universe.py       #   get_universe("nifty500") → list[str]
 │   │   ├── indicators/           #   RSI, EMA, ATR, Supertrend, VWAP, volume SMA
 │   │   ├── models/               #   Candle, Signal, Timeframe (Pydantic)
-│   │   ├── notifications/        #   Notifier, Telegram send, error alerts
-│   │   ├── research/             #   scoring.py (signal scorer), regime.py (MarketRegime enum)
+│   │   ├── notifications/        #   Notifier, templates, Telegram send, error/health alerts
+│   │   ├── research/
+│   │   │   ├── scoring.py        #   Signal scorer (regime + RS + sector + setup + confluence)
+│   │   │   ├── regime.py         #   MarketRegime enum + compute_regime() from S3
+│   │   │   └── rs_compute.py     #   90-day RS percentile + within-sector rank
 │   │   ├── risk/                 #   engine.py (RiskGuard, RiskConfig, PortfolioSnapshot)
 │   │   └── strategies/           #   8 strategy implementations + registry
 │   └── market_ai/                # Lambda/ECS entry points
 │       └── handlers/
 │           ├── morning.py        #   07:00 IST — scan + score + risk guard → Telegram
+│           ├── pre_open.py       #   09:05 IST — live NSE IEP + GPT commentary → Telegram
 │           ├── evening.py        #   19:00 IST — scan + Groww holdings → Telegram
 │           ├── weekly.py         #   Sunday 10:00 IST — compounder research → Telegram
 │           ├── token_refresh.py  #   Daily 06:00 IST — Groww TOTP token refresh
@@ -209,6 +231,13 @@ The data pipeline (`market_ai.handlers.data_pipeline`) runs at 04:00 IST every t
     → Re-fetch full history via yfinance (auto_adjust=True)
     → Set adjusted_flag on S3 to prevent future bhavcopy overwrites
     → Send Telegram alert
+
+  Phase 4: Indicator pre-computation
+    → EMA20, EMA50, EMA200, RSI14, ATR14, SuperTrend(10, 3.0) for all symbols
+    → Written to S3 alongside OHLCV Parquet
+
+  On success: Telegram health ping (date, rows, symbols)
+  On failure: Telegram error alert
 ```
 
 ### S3 data layout
@@ -278,9 +307,9 @@ Each signal is passed to `score_signal(...)` which produces a composite score:
 
 | Dimension | Weight | Notes |
 |---|---|---|
-| `regime_score` | 20% | Market regime (BULL/BEAR/CHOPPY/UNKNOWN). Currently `UNKNOWN` = neutral. |
-| `rs_score` | 20% | RS percentile vs NIFTY 500. Currently `None` = neutral. |
-| `sector_score` | 15% | Sector rank. Currently `None` = neutral. |
+| `regime_score` | 20% | BULL/BEAR/CHOPPY/STRONG_BULL/CORRECTION from `compute_regime()`. |
+| `rs_score` | 20% | 90-day RS percentile vs NIFTY 500 from `compute_rs_percentiles()`. |
+| `sector_score` | 15% | Within-sector rank from `compute_sector_ranks()`. |
 | `setup_score` | 35% | Based on strategy family (MOMENTUM / BREAKOUT / PULLBACK) and relative volume. |
 | `confluence_bonus` | 10% | Added when ≥2 strategy families fire on same symbol. |
 
@@ -295,6 +324,8 @@ The score and its breakdown are attached to `sig.indicators["score"]` and `sig.i
 | Max open positions | configurable via `RiskConfig` |
 | Max capital in one sector | configurable |
 | Max capital in one segment (LARGE/MID/SMALL) | configurable |
+| Earnings blackout | Top-50 NIFTY 500 stocks within 3 days of earnings |
+| Daily/weekly loss limit | Real P&L from paper trade journal |
 
 Rejected signals are logged with reason; only approved signals reach Telegram.
 
@@ -304,7 +335,7 @@ Rejected signals are logged with reason; only approved signals reach Telegram.
 
 ### ECS Backtest (Sunday 11:00 IST)
 
-The full-universe backtest runs on ECS Fargate (4 vCPU / 8 GB), not Lambda. This eliminates the Lambda 15-minute hard timeout. A 554-symbol run across 8 strategies completes in ~2 minutes.
+The full-universe backtest runs on ECS Fargate (4 vCPU / 8 GB), not Lambda. This eliminates the Lambda 15-minute hard timeout. A 513-symbol run across 8 strategies completes in ~2 minutes.
 
 ECS task command: `scripts/run_backtest.py --strategy all --universe nifty500 --start 2019-01-01`
 
@@ -344,9 +375,11 @@ Top strategy and full ranking written back to `market-ai-dev-leaderboard` Dynamo
 | AWS account with programmatic access | IAM user with Lambda, ECR, S3, DynamoDB, Secrets Manager, ECS, EventBridge, CloudWatch, IAM permissions |
 | Groww Trade API account | `groww.in/trade-api/api-keys` — free tier |
 | Telegram bot + chat ID | Create via BotFather (`/newbot`); get chat ID via `@userinfobot` |
+| OpenAI API key | Used by `pre_open` (GPT-4o commentary) and `weekly` (AI summary). Optional — both handlers degrade gracefully if unavailable. |
 | Python 3.12 | For local development and CI |
 | Terraform >= 1.6 | Required for S3 backend syntax |
 | Docker | Required to build the Lambda/ECS container image locally |
+| Streamlit Community Cloud account | Free tier at streamlit.io — for dashboard deployment (optional) |
 
 ---
 
@@ -390,7 +423,7 @@ aws ecr create-repository \
 
 ### 10.3 AWS Secrets Manager
 
-Two secrets must be populated manually. Terraform creates the containers but does not set values. **Use the AWS Console** to avoid JSON escaping issues.
+Three secrets must be populated manually. Terraform creates the containers but does not set values. **Use the AWS Console** to avoid JSON escaping issues.
 
 **`market-ai-dev/groww`:**
 
@@ -406,6 +439,12 @@ Two secrets must be populated manually. Terraform creates the containers but doe
 |---|---|
 | `bot_token` | Same as `TELEGRAM_BOT_TOKEN` GitHub secret |
 | `chat_id` | Same as `TELEGRAM_CHAT_ID` GitHub secret |
+
+**`market-ai-dev/openai`:**
+
+| Key | Description |
+|---|---|
+| `api_key` | OpenAI API key (used by `pre_open` and `weekly` handlers) |
 
 ### 10.4 Deploy
 
@@ -427,16 +466,17 @@ aws lambda invoke \
 
 **Seed historical data (first-time only):**
 
-The data pipeline runs daily from 2019-01-01, but the first run needs to backfill 7 years of history. Trigger the extended backfill Lambda (900s timeout):
+The data pipeline runs daily, but the first run needs to backfill years of history. Trigger the backfill mode manually (runs in chunks; re-invoke until `done=true`):
 
 ```bash
 aws lambda invoke \
-  --function-name market-ai-dev-data-pipeline-backfill \
+  --function-name market-ai-dev-data_pipeline \
   --region ap-south-1 \
-  /tmp/backfill_output.json
+  --payload '{"mode": "backfill", "start": "2019-01-01", "end": "2026-12-31", "step_days": 180}' \
+  /tmp/backfill_output.json && cat /tmp/backfill_output.json
+# Check "done": false → re-invoke until "done": true
+# Omit "start" on subsequent calls — checkpoint resumes automatically
 ```
-
-This runs once and populates S3 with the full Parquet history. Daily runs after that are incremental (1-day appends).
 
 ---
 
@@ -450,6 +490,12 @@ aws lambda invoke \
   --function-name market-ai-dev-morning \
   --region ap-south-1 \
   /tmp/morning_output.json && cat /tmp/morning_output.json
+
+# Pre-open scan (09:05 IST equivalent — run after 09:00 IST for live NSE data)
+aws lambda invoke \
+  --function-name market-ai-dev-pre_open \
+  --region ap-south-1 \
+  /tmp/preopen_output.json && cat /tmp/preopen_output.json
 
 # Evening scan (19:00 IST equivalent)
 aws lambda invoke \
@@ -482,7 +528,8 @@ aws lambda invoke \
 |---|---|
 | morning / evening | `scan_date`, `universe_size`, `scanned`, `signals`, `errors` |
 | evening (extra) | `open_positions` (from Groww holdings) |
-| data_pipeline | `total_rows`, `total_days`, `symbols_updated`, `splits_detected` |
+| pre_open | `date`, `candidates`, `top_symbol`, `gift_nifty_direction`, `commentary_ok` |
+| data_pipeline | `date`, `rows`, `symbols`, `adjusted` |
 | leaderboard | `top_strategy`, `ranked` (array) |
 
 ### CloudWatch Logs
@@ -498,6 +545,11 @@ aws logs filter-log-events \
   --log-group-name /aws/lambda/market-ai-dev-evening \
   --region ap-south-1 \
   --start-time $(date -d '30 minutes ago' +%s000)
+
+# Pre-open logs
+aws logs tail /aws/lambda/market-ai-dev-pre_open \
+  --region ap-south-1 \
+  --follow
 
 # ECS backtest logs
 aws logs tail /ecs/market-ai-dev-screener \
@@ -655,7 +707,7 @@ File: `.github/workflows/main.yml`. Triggers on push to `main` and PRs targeting
 
 1. Configure AWS via `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
 2. ECR login
-3. Build and push image tagged `$GITHUB_SHA` and `latest`
+3. Build and push image tagged `$GITHUB_SHA` and `latest` with `--provenance=false`
 4. `terraform init` (S3 backend)
 5. `terraform plan -var="ecr_image_tag=$GITHUB_SHA" ...`
 6. `terraform apply -auto-approve`
@@ -695,7 +747,50 @@ The evening handler calls Groww holdings API (read-only). It is non-fatal — if
 
 ---
 
-## 16. Adding a New Strategy
+## 16. Streamlit Dashboard
+
+The dashboard (`dashboard/app.py`) is a 5-page Streamlit app that reads DynamoDB and S3. It can be deployed to Streamlit Community Cloud (free tier) or run locally.
+
+### Pages
+
+| Page | Data source |
+|---|---|
+| Live Signals | DynamoDB `SIGNAL_{date}` items |
+| Paper P&L | DynamoDB paper trade items |
+| Leaderboard | DynamoDB leaderboard table |
+| Backtest | S3 backtest results JSON |
+| Market Regime | DynamoDB `REGIME` / `current` item |
+
+### Streamlit Community Cloud Deployment
+
+1. Fork or connect the repo to your Streamlit Cloud account at `streamlit.io`.
+2. Set the main file path to `dashboard/app.py`.
+3. In **App settings → Secrets**, paste the contents of `.streamlit/secrets.toml.example` with real values filled in:
+
+```toml
+[aws]
+aws_access_key_id     = "AKIA..."
+aws_secret_access_key = "..."
+aws_region            = "ap-south-1"
+
+[app]
+state_table       = "market-ai-dev-state"
+leaderboard_table = "market-ai-dev-leaderboard"
+data_bucket       = "market-ai-dev-data-ap-south-1-..."
+```
+
+### Local Dashboard
+
+```bash
+cd dashboard
+pip install -r requirements.txt
+# Set env vars or create .streamlit/secrets.toml from the example
+streamlit run app.py
+```
+
+---
+
+## 17. Adding a New Strategy
 
 **Step 1 — Create the file** in `src/app/strategies/`:
 
@@ -750,7 +845,7 @@ _FAMILY_MAP["my_strategy"] = StrategyFamily.BREAKOUT  # or MOMENTUM / PULLBACK
 
 ---
 
-## 17. Symbol Universe
+## 18. Symbol Universe
 
 **File:** `src/app/data/nifty500_symbols.py`
 
@@ -769,7 +864,7 @@ _FAMILY_MAP["my_strategy"] = StrategyFamily.BREAKOUT  # or MOMENTUM / PULLBACK
 | `ADANITRANS` | `ADANIENT` | Restructure |
 | `TVSMOTORS` | `TVSMOTOR` | NSE symbol change |
 
-**Semi-annual refresh:** NIFTY 500 rebalances every March and September. The symbol list must be manually updated at each rebalance. No automated sync script currently exists.
+**Semi-annual refresh:** NIFTY 500 rebalances every March and September. The symbol list must be manually updated at each rebalance. `scripts/sync_nifty500.py` provides a CLI to assist.
 
 ### Corporate Action Handling
 
@@ -787,17 +882,18 @@ When triggered:
 
 ---
 
-## 18. Key Constraints and Gotchas
+## 19. Key Constraints and Gotchas
 
 | Constraint | Detail |
 |---|---|
 | `ENABLE_LIVE_ORDERS` must be `"true"` for real orders | Hardcoded `"false"` in `main.tf` locals. `GrowwBroker.place_order()` raises `ValueError` if not exactly `"true"`. No orders under any current configuration. |
-| `fill_gaps=False` in scan handlers | Morning and evening handlers use `HybridDataProvider(fill_gaps=False)`. This means they read S3 only — zero broker/market API calls at scan time. The data pipeline must have run successfully first. If data is stale, a freshness warning is logged and sent to Telegram. |
+| `fill_gaps=False` in scan handlers | Morning and evening handlers use `HybridDataProvider(fill_gaps=False)`. This means they read S3 only — zero broker/market API calls at scan time. The data pipeline must have run successfully first. If data is stale, the morning summary message explicitly says so ("Data stale: N days behind"). |
 | ECR push before Terraform apply | The deploy job pushes the image first. Reversing this order causes a Lambda update failure. |
+| `--provenance=false` on ECR push | Docker BuildKit ≥0.11 attaches OCI provenance attestation layers by default, producing an OCI Image Index. AWS Lambda `UpdateFunctionCode` only accepts single-arch Docker Schema v2 manifests. The `--provenance=false` flag on `docker build` prevents this. Do not remove it. |
 | Terraform state backend | S3: `market-ai-tf-state-ap-south-1`, key: `market-ai/dev/terraform.tfstate`, lock table: `market-ai-tf-locks`. Both must exist before `terraform init`. |
 | AWS auth — static keys only | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` used directly. No `assume_role` block in S3 backend or AWS provider. Do not add one. |
 | Terraform >= 1.6 required | TF 1.6 changed S3 backend `assume_role` syntax. `required_version = ">= 1.6"` enforces this. |
-| Lambda deployed as container image | `package_type = "Image"` avoids the 250 MB unzipped ZIP limit. All four scan Lambdas share a single ECR image; `image_config.command` overrides the CMD per function. |
+| Lambda deployed as container image | `package_type = "Image"` avoids the 250 MB unzipped ZIP limit. All scan Lambdas share a single ECR image; `image_config.command` overrides the CMD per function. |
 | Intraday strategy skipped in daily scan | `intraday_support_supertrend` requests M5 candles. Morning and evening handlers skip any strategy where `strategy.timeframe == Timeframe.M5`. |
 | Warmup window is 400 calendar days | Scan handlers fetch 400 days of daily history per symbol. EMA200 needs ~280 trading days; the 400-day calendar buffer ensures enough bars after weekends and holidays. |
 | NSE holiday calendar | `app/core/time_utils.py` has NSE holidays for 2024, 2025, 2026, 2027. A module-level warning fires if the current year is not in the set. Add the next year's holidays each December. |
@@ -805,20 +901,20 @@ When triggered:
 | ECR lifecycle | Only the last 10 images are retained. Do not rely on image tags beyond the most recent 10 pushes. |
 | Survivorship bias in backtest | The backtest uses the Oct 2026 NIFTY 500 list. Companies delisted between 2019 and 2026 are absent. A warning is logged once per run. Fixing this requires historical index membership data (significant architecture work). |
 | Open trades excluded from backtest metrics | Only closed trades are included in win rate, Sharpe, and return calculations. Open trades at end-of-backtest are counted separately. |
+| Pre-open Lambda requires live NSE access | `pre_open` fetches IEP data directly from NSE at runtime. It is independent of S3 data freshness. If NSE blocks the Lambda IP, it sends an error alert and exits cleanly. |
 
 ---
 
-## 19. Known Gaps (Intentional)
+## 20. Known Gaps (Intentional)
 
 These are tracked but not bugs:
 
 | Gap | Notes |
 |---|---|
-| Market regime computation | `regime=MarketRegime.UNKNOWN` in morning.py. Regime scoring dimension is neutral (no boost/penalty). Fix: detect NIFTY trend state from S3 data and pass to scorer. |
-| RS percentile and sector rank | `rs_percentile=None, sector_rank=None` in morning.py. These scoring dimensions are neutral. Fix: cross-symbol RS computation across the full NIFTY 500 each morning. |
 | Weekly fundamentals | `weekly.py` uses a price-based proxy for fundamental scores (EMA200 trend as quality filter). Real P/E, EPS, ROCE from Tijori Finance or Tickertape would improve accuracy. |
-| NIFTY 500 rebalance sync | `nifty500_symbols.py` is a static snapshot (Oct 2026). It should be refreshed each March and September when NSE publishes the rebalanced constituent list. |
+| NIFTY 500 rebalance sync | `nifty500_symbols.py` is a static snapshot (Oct 2026). It should be refreshed each March and September when NSE publishes the rebalanced constituent list. `scripts/sync_nifty500.py` provides a starting point but requires manual review. |
 | Point-in-time universe | Backtest uses the current constituent list, not the historical one. Survivorship bias exists. |
+| Pre-open Lambda IP | NSE may block Lambda NAT gateway IPs as scraping. If blocked, the handler sends a Telegram error and exits — no data is available from an alternative source at that latency. |
 
 ---
 
